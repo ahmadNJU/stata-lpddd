@@ -1,5 +1,5 @@
 *==============================================================================================
-* lpddd_example.do     example and tests for lpddd 0.1.1 (23 November 2026)
+* lpddd_example.do     example and tests for lpddd 0.1.1 (22 November 2026)
 *
 * Run in Stata:   do lpddd_example.do
 * Needs:          lpddd. Tests 3 and 6 need reghdfe and ftools and are skipped without them;
@@ -22,6 +22,15 @@ set more off
 set varabbrev off
 capture which reghdfe
 local has_reghdfe = (_rc == 0)
+
+* To test lpddd without reghdfe, change the 0 in the next line to 1: every command then
+* uses the built-in commands (regress and xtreg) and tests 3 and 6 are skipped.
+local builtin_only 0
+local eng ""
+if `builtin_only' {
+    local has_reghdfe 0
+    local eng "engine(builtin)"
+}
 set seed 20261122
 
 *----------------------------------------------------------------------------------------------
@@ -60,14 +69,14 @@ save `sim'
 *    about -0.5 afterwards; spans 3 to 11 and 12 to 23 about -0.5)
 *----------------------------------------------------------------------------------------------
 lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
-    log season(12) pre(24) post(24) spans(-24 -13 -12 -1 0 2 3 11 12 23) graph
+    log season(12) pre(24) post(24) spans(-24 -13 -12 -1 0 2 3 11 12 23) graph `eng'
 ereturn list
 
 *----------------------------------------------------------------------------------------------
 * 2. One stack, one month: lpddd against the triple difference of the four cell means
 *----------------------------------------------------------------------------------------------
 lpddd y if cohort == 50 | cohort == 0, unit(unit) time(t) group(product) cohort(cohort) ///
-    eligible(china) log season(12) post(12) notable
+    eligible(china) log season(12) post(12) notable `eng'
 matrix R = e(results)
 scalar auto = .
 forvalues i = 1/`=rowsof(R)' {
@@ -130,11 +139,11 @@ use `sim', clear
 * 4. Weights and explicit aggregation of the stacks
 *----------------------------------------------------------------------------------------------
 lpddd y [aweight = w], unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
-    log season(12) noevent spans(3 11 12 23) gfe strata(chapter)
+    log season(12) noevent spans(3 11 12 23) gfe strata(chapter) `eng'
 lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
-    log season(12) noevent spans(3 11 12 23) aggregate(cohort)
+    log season(12) noevent spans(3 11 12 23) aggregate(cohort) `eng'
 lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
-    log season(12) noevent spans(3 11 12 23) aggregate(equal)
+    log season(12) noevent spans(3 11 12 23) aggregate(equal) `eng'
 
 *----------------------------------------------------------------------------------------------
 * 5. Difference-in-differences
@@ -144,11 +153,11 @@ lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
 *       (the two are expected to agree; this test only displays them)
 *----------------------------------------------------------------------------------------------
 lpddd y if china == 0, unit(unit) time(t) group(product) cohort(cohort) dd ///
-    log season(12) noevent spans(-12 -1 3 11 12 23)
+    log season(12) noevent spans(-12 -1 3 11 12 23) `eng'
 
 keep if china == 1
 generate double ly = ln(y)
-lpddd ly, unit(unit) time(t) group(product) cohort(cohort) dd pre(5) post(10)
+lpddd ly, unit(unit) time(t) group(product) cohort(cohort) dd pre(5) post(10) `eng'
 capture which lpdid
 if _rc == 0 {
     generate byte treat = (cohort > 0 & t >= cohort)
@@ -175,7 +184,7 @@ if `has_reghdfe' {
             log season(12) noevent spans(12 23) `spec' engine(builtin) notable
         matrix B = e(results)
         display as result "Test 6, specification `s' (`spec'): reghdfe " A[1, 4] " (" A[1, 5] ")   built-in " B[1, 4] " (" B[1, 5] ")"
-        display as result "        relative difference: coefficient " reldif(A[1, 4], B[1, 4]) ", standard error " reldif(A[1, 5], B[1, 5])
+        display as result "        relative difference: coefficient " reldif(A[1, 4], B[1, 4]) ", standard error " abs(A[1, 5] - B[1, 5]) / abs(A[1, 5])
         assert reldif(A[1, 4], B[1, 4]) < 1e-8
     }
 }
