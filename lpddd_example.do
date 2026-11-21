@@ -1,8 +1,9 @@
 *==============================================================================================
-* lpddd_example.do     example and tests for lpddd 0.1.0 (22 November 2026)
+* lpddd_example.do     example and tests for lpddd 0.1.1 (23 November 2026)
 *
 * Run in Stata:   do lpddd_example.do
-* Needs:          lpddd, reghdfe, ftools  (lpdid is used in test 5 if it is installed)
+* Needs:          lpddd. Tests 3 and 6 need reghdfe and ftools and are skipped without them;
+*                 test 5 uses lpdid if it is installed. Run with variable abbreviation off.
 *
 * The data are simulated: 400 products (groups), each imported from China (eligible unit)
 * and from all other suppliers (ineligible unit), 96 months. Three cohorts of products get
@@ -12,11 +13,15 @@
 * and the taxed products have their own trend: a difference-in-differences is biased by
 * these trends, the triple difference is not.
 *
-* Tests 2 and 3 stop with an error if lpddd does not reproduce the hand-made estimate.
+* Tests 2, 3, 6 and 7 stop with an error if lpddd does not reproduce the estimate it is
+* compared with.
 *==============================================================================================
-version 14
+version 15.1
 clear all
 set more off
+set varabbrev off
+capture which reghdfe
+local has_reghdfe = (_rc == 0)
 set seed 20261122
 
 *----------------------------------------------------------------------------------------------
@@ -85,8 +90,9 @@ assert reldif(auto, manual) < 1e-8
 * 3. Three stacks, one span, group and sector effects: lpddd against a stacked regression
 *    built by hand (the specification of a tariff-line trade study)
 *----------------------------------------------------------------------------------------------
+if `has_reghdfe' {
 lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
-    log season(12) noevent spans(12 23) gfe strata(chapter)
+    log season(12) noevent spans(12 23) gfe strata(chapter) engine(reghdfe)
 matrix R = e(results)
 scalar auto_b = R[1, 4]
 scalar auto_se = R[1, 5]
@@ -116,6 +122,8 @@ scalar manual_se = _se[D]
 display as result "Test 3: lpddd " auto_b " (" auto_se ")   by hand " manual_b " (" manual_se ")"
 assert reldif(auto_b, manual_b) < 1e-8
 assert reldif(auto_se, manual_se) < 1e-6
+}
+else display as text "reghdfe is not installed; test 3 skipped"
 use `sim', clear
 
 *----------------------------------------------------------------------------------------------
@@ -148,4 +156,58 @@ if _rc == 0 {
 }
 else display as text "lpdid is not installed; comparison skipped (ssc install lpdid)"
 
-display _newline as result "lpddd_example.do finished: tests 2 and 3 passed."
+use `sim', clear
+
+*----------------------------------------------------------------------------------------------
+* 6. Built-in commands against reghdfe: the coefficients must agree; the standard errors are
+*    displayed and their relative difference is reported (they can differ slightly through
+*    the count of degrees of freedom)
+*----------------------------------------------------------------------------------------------
+if `has_reghdfe' {
+    forvalues s = 1/3 {
+        if `s' == 1 local spec ""
+        if `s' == 2 local spec "gfe strata(chapter)"
+        if `s' == 3 local spec "strata(chapter) aggregate(cohort)"
+        lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+            log season(12) noevent spans(12 23) `spec' engine(reghdfe) notable
+        matrix A = e(results)
+        lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+            log season(12) noevent spans(12 23) `spec' engine(builtin) notable
+        matrix B = e(results)
+        display as result "Test 6, specification `s' (`spec'): reghdfe " A[1, 4] " (" A[1, 5] ")   built-in " B[1, 4] " (" B[1, 5] ")"
+        display as result "        relative difference: coefficient " reldif(A[1, 4], B[1, 4]) ", standard error " reldif(A[1, 5], B[1, 5])
+        assert reldif(A[1, 4], B[1, 4]) < 1e-8
+    }
+}
+else display as text "reghdfe is not installed; test 6 skipped"
+
+*----------------------------------------------------------------------------------------------
+* 7. Explicit aggregation: with equal weights the estimate must be the simple mean of the
+*    three estimates obtained stack by stack, and e(stack_b) must hold these three estimates
+*    (built-in commands, which solve the regression exactly)
+*----------------------------------------------------------------------------------------------
+scalar avg = 0
+local k 0
+foreach g in 50 53 56 {
+    local ++k
+    lpddd y if cohort == `g' | cohort == 0, unit(unit) time(t) group(product) cohort(cohort) ///
+        eligible(china) log season(12) noevent spans(12 23) engine(builtin) notable
+    matrix A = e(results)
+    scalar one`k' = A[1, 4]
+    scalar avg = avg + A[1, 4] / 3
+}
+lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) noevent spans(12 23) aggregate(equal) engine(builtin)
+matrix B = e(results)
+matrix S = e(stack_b)
+matrix W = e(stack_w)
+matrix list S
+matrix list W
+display as result "Test 7: mean of the three stacks " %18.15f avg "   aggregate(equal) " %18.15f B[1, 4]
+assert reldif(avg, B[1, 4]) < 1e-10
+forvalues k = 1/3 {
+    assert reldif(one`k', S[1, `k']) < 1e-10
+}
+ereturn list
+
+display _newline as result "lpddd_example.do finished: all tests that were run passed."

@@ -10,7 +10,7 @@ d is compared with the same season before treatment. With spans() effects are
 d estimated for spans of periods. A difference-in-differences is available
 d with the option dd.
 d
-d Requires: Stata version 14 and reghdfe, ftools from SSC
+d Requires: Stata version 15.1. Uses reghdfe (SSC) if it is installed.
 d
 d KW: local projections
 d KW: triple difference

@@ -2,7 +2,7 @@
 
 Stacked local-projection triple differences for Stata, with a seasonal base period and estimates for spans of periods.
 
-Version 0.1.0 (22 November 2026). This is a first version for testing.
+Version 0.1.1 (22 November 2026). This is a version for testing.
 
 ## What it does
 
@@ -20,12 +20,7 @@ A difference-in-differences is available with the option `dd`.
 
 ## Install
 
-Requires Stata 14 or later and `reghdfe`:
-
-```stata
-ssc install reghdfe
-ssc install ftools
-```
+Requires Stata 15.1 or later. No other package is needed. If `reghdfe` is installed it is used, which is faster with many fixed effects (`ssc install reghdfe`, `ssc install ftools`); the option `absorb()` requires it.
 
 From GitHub:
 
@@ -56,7 +51,7 @@ lpddd imports, unit(prod_supp) time(month) group(product) cohort(first_tariff) /
 do lpddd_example.do
 ```
 
-The do-file simulates data with a known effect and checks `lpddd` against two estimates made by hand: the triple difference of four cell means for one stack and one month, and a stacked regression with group and sector effects for a span. It stops with an error if they differ. If `lpdid` is installed it also displays `lpddd, dd` beside `lpdid, nevertreated`.
+The do-file simulates data with a known effect and stops with an error if a check fails. It compares `lpddd` with the triple difference of four cell means (one stack, one month), with a stacked regression built by hand (group and sector effects, one span), with itself under the two estimation commands (`reghdfe` and built-in), and with the mean of stack-by-stack estimates (equal weights). If `lpdid` is installed it also displays `lpddd, dd` beside `lpdid, nevertreated`.
 
 ## Files
 

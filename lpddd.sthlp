@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.1.0  22nov2026}{...}
+{* *! version 0.1.1  22nov2026}{...}
 {viewerjumpto "Syntax" "lpddd##syntax"}{...}
 {viewerjumpto "Description" "lpddd##description"}{...}
 {viewerjumpto "Options" "lpddd##options"}{...}
@@ -54,6 +54,7 @@
 {synopt:{opt abs:orb(absvars)}}further fixed effects, passed to {cmd:reghdfe}{p_end}
 {synopt:{opt agg:regate(ols|cohort|equal)}}how the stacks are combined; default {cmd:ols}{p_end}
 {synopt:{opth cl:uster(varname)}}cluster variable; default is {opt group()}{p_end}
+{synopt:{opt eng:ine(reghdfe|builtin)}}estimation command; default is {cmd:reghdfe} if installed, otherwise built-in commands{p_end}
 
 {syntab:Reporting}
 {synopt:{opt l:evel(#)}}confidence level; default {cmd:level(95)}{p_end}
@@ -64,7 +65,7 @@
 {p 4 6 2}
 {cmd:aweight}s, {cmd:pweight}s and {cmd:fweight}s are allowed and must be constant within a unit.{p_end}
 {p 4 6 2}
-{cmd:lpddd} requires {cmd:reghdfe} (Correia): {cmd:ssc install reghdfe} and {cmd:ssc install ftools}.{p_end}
+{cmd:lpddd} runs without other packages. If {cmd:reghdfe} (Correia) is installed it is used, which is faster with many fixed effects; {opt absorb()} requires it.{p_end}
 
 
 {marker description}{...}
@@ -207,8 +208,8 @@ that comparisons are made within its categories. With {opt gfe} only the
 stack-by-eligibility effects are interacted.
 
 {phang}
-{opt absorb(absvars)} adds fixed effects in the notation of {cmd:reghdfe}. For spans the
-variables should not vary over time within a unit.
+{opt absorb(absvars)} adds fixed effects in the notation of {cmd:reghdfe} and requires
+{cmd:reghdfe}. For spans the variables should not vary over time within a unit.
 
 {phang}
 {opt aggregate(ols)} estimates one coefficient from the pooled stacks. It is a weighted
@@ -222,6 +223,15 @@ for control groups that appear in several stacks.
 {phang}
 {opth cluster(varname)} sets the cluster variable. Control groups appear in several
 stacks; clustering by {opt group()} or a coarser variable accounts for this.
+
+{phang}
+{opt engine(reghdfe)} estimates with {cmd:reghdfe}; {opt engine(builtin)} uses
+{cmd:regress}, or {cmd:xtreg, fe} with {opt gfe}. The coefficients are the same. Standard
+errors can differ slightly because the commands count degrees of freedom differently.
+With {opt engine(builtin)} the fixed effects other than the group effects enter as
+indicator variables, so many strata need a large {cmd:matsize} in Stata 15, and with
+{opt gfe} weights must be constant within a group. A note is shown if a regression
+could not be estimated.
 
 {dlgtab:Reporting}
 
@@ -283,6 +293,7 @@ groups, and that ineligible units and control groups are not affected by the tre
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}largest number of observations in a regression{p_end}
+{synopt:{cmd:e(N_clust)}}largest number of clusters in a regression{p_end}
 {synopt:{cmd:e(n_stacks)}}number of stacks (treated cohorts){p_end}
 {synopt:{cmd:e(season)}}length of the seasonal cycle{p_end}
 {synopt:{cmd:e(pre)}}periods before treatment{p_end}
@@ -300,11 +311,23 @@ groups, and that ineligible units and control groups are not affected by the tre
 {synopt:{cmd:e(transform)}}{cmd:none}, {cmd:log} or {cmd:ihs}{p_end}
 {synopt:{cmd:e(absorb)}}fixed effects of the regressions{p_end}
 {synopt:{cmd:e(clustvar)}}cluster variable{p_end}
+{synopt:{cmd:e(vce)}}{cmd:cluster}{p_end}
+{synopt:{cmd:e(vcetype)}}{cmd:Robust}{p_end}
+{synopt:{cmd:e(engine)}}{cmd:reghdfe} or {cmd:builtin}{p_end}
+{synopt:{cmd:e(wtype)}}weight type{p_end}
+{synopt:{cmd:e(wexp)}}weight expression{p_end}
+{synopt:{cmd:e(title)}}title of the estimation{p_end}
+{synopt:{cmd:e(properties)}}{cmd:b V}{p_end}
 
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}estimates; names m{it:#} (period -#), p{it:#} (period +#), span{it:#}{p_end}
 {synopt:{cmd:e(V)}}variances on the diagonal; the estimates come from separate regressions, so covariances are not available{p_end}
 {synopt:{cmd:e(results)}}one row per period or span: type, from, to, b, se, t, p, ll, ul, N, ref{p_end}
+{synopt:{cmd:e(stack_b)}}with {opt aggregate(cohort)} or {opt aggregate(equal)}: estimate of each stack, one row per row of {cmd:e(results)}{p_end}
+{synopt:{cmd:e(stack_w)}}the weights given to the stacks{p_end}
+
+{pstd}
+{cmd:e(sample)} is not set: the estimates come from many regressions on the stacked data, not on the data in memory.
 
 
 {marker references}{...}

@@ -1,10 +1,10 @@
-*! lpddd 0.1.0  22nov2026
+*! lpddd 0.1.1  22nov2026
 *! Stacked local-projection triple differences (and differences-in-differences)
 *! with a seasonal base period and estimates for spans of periods
-*! Requires reghdfe (Correia), available from SSC
+*! Uses reghdfe (Correia, SSC) if it is installed; otherwise regress and xtreg
 
 program define lpddd, eclass
-    version 14.0
+    version 15.1
     syntax varname(numeric) [if] [in] [aweight pweight fweight] ,      ///
         Unit(varname) Time(varname numeric) GROup(varname)             ///
         COHort(varname numeric)                                        ///
@@ -12,16 +12,30 @@ program define lpddd, eclass
           SEASon(integer 1) SPANs(numlist integer) noEVent LOG IHS     ///
           FILLzero CONTrol(string) GFE STRata(varname) ABSorb(string)  ///
           AGGregate(string) CLuster(varname) Level(cilevel) GRAph      ///
+          ENGine(string)                                               ///
           SAVing(string asis) noTABle ]
 
     local cmdline `"lpddd `0'"'
     local y `varlist'
 
     * ------------------------------------------------------------------ checks
+    if !inlist("`engine'", "", "reghdfe", "builtin") {
+        display as error "engine() must be reghdfe or builtin"
+        exit 198
+    }
     capture which reghdfe
-    if _rc {
-        display as error "lpddd requires reghdfe. Type: ssc install reghdfe  and  ssc install ftools"
+    local hasreghdfe = (_rc == 0)
+    if "`engine'" == "" {
+        if `hasreghdfe' local engine "reghdfe"
+        else local engine "builtin"
+    }
+    if "`engine'" == "reghdfe" & !`hasreghdfe' {
+        display as error "engine(reghdfe) requires reghdfe. Type: ssc install reghdfe  and  ssc install ftools"
         exit 199
+    }
+    if "`engine'" == "builtin" & `"`absorb'"' != "" {
+        display as error "absorb() requires reghdfe (ssc install reghdfe; ssc install ftools)"
+        exit 198
     }
     if "`dd'" == "" & "`eligible'" == "" {
         display as error "specify eligible() for a triple difference, or dd for a difference-in-differences"
@@ -175,7 +189,7 @@ program define lpddd, eclass
     capture assert `time' == int(`time')
     if _rc {
         display as error "time() must contain integers"
-        exit 459
+        exit 451
     }
     capture assert `cohort' == int(`cohort') if !missing(`cohort')
     if _rc {
@@ -184,8 +198,8 @@ program define lpddd, eclass
     }
     capture isid __lp_u `time'
     if _rc {
-        display as error "unit() and time() do not uniquely identify the observations"
-        exit 459
+        display as error "repeated time values within unit(): unit() and time() must identify the observations"
+        exit 451
     }
     quietly generate byte __lp_never = missing(`cohort') | `cohort' == 0
     quietly bysort __lp_g (`cohort'): generate byte __lp_bad = (`cohort'[1] != `cohort'[_N])
@@ -200,7 +214,7 @@ program define lpddd, eclass
         capture assert inlist(`eligible', 0, 1)
         if _rc {
             display as error "eligible() must be 0 or 1"
-            exit 459
+            exit 450
         }
         quietly bysort __lp_u (`eligible'): generate byte __lp_bad = (`eligible'[1] != `eligible'[_N])
         quietly count if __lp_bad
@@ -240,12 +254,12 @@ program define lpddd, eclass
     local ng : word count `glist'
     if `ng' == 0 {
         display as error "no treated cohort: cohort() is 0 or missing in all observations"
-        exit 459
+        exit 2001
     }
     quietly count if __lp_never
     if r(N) == 0 & "`control'" == "never" {
         display as error "no never-treated group; consider control(notyet)"
-        exit 459
+        exit 2001
     }
 
     * fixed effects
@@ -262,6 +276,11 @@ program define lpddd, eclass
         local fe "`fe1' `fe2'"
     }
     if `"`absorb'"' != "" local fe `"`fe' `absorb'"'
+    * built-in commands: "one" = one set of effects (regress), "two" = two sets (regress),
+    * "xt" = group effects absorbed by xtreg, fe and the other set as indicators
+    local mode "two"
+    if "`dd'" != "" local mode "one"
+    else if "`gfe'" != "" local mode "xt"
 
     local carry __lp_u __lp_g __lp_T __lp_Q __lp_D __lp_stack `clv' `wkeep' `strk' `absv'
     local carry : list uniq carry
@@ -345,9 +364,13 @@ program define lpddd, eclass
     * ------------------------------------------------------------------ estimates
     * columns of the results matrix:
     *   type (0 event time, 1 span), from, to, b, se, t, p, ll, ul, N, ref (1 = reference period)
-    tempname R bb vv sb sse sN sdf st sp sll sul crit
+    tempname R bb vv sb sse sN sdf sncl st sp sll sul crit BS WS tmpm
     local names ""
     local Nmax 0
+    local Nclmax 0
+    local lastrc 0
+    local nfail 0
+    local fitopt d(__lp_D) fe(`fe') clv(`clv') agg(`aggregate') nst(`ng') engine(`engine') mode(`mode')
     local wopt ""
     if "`weight'" != "" local wopt "wtype(`weight')"
 
@@ -362,19 +385,37 @@ program define lpddd, eclass
                     generate byte __lp_D`k' = __lp_D * (__lp_stack == `k')
                 }
             }
+            if "`engine'" == "builtin" {
+                if "`mode'" == "one" egen long __lp_fa = group(__lp_stack `strk')
+                else if "`mode'" == "xt" egen long __lp_fa = group(__lp_stack __lp_g)
+                else egen long __lp_fa = group(__lp_stack __lp_T `strk')
+                if "`mode'" != "one" egen long __lp_fb = group(__lp_stack __lp_Q `strk')
+                if "`mode'" == "xt" xtset __lp_fa
+            }
         }
         forvalues e = -`pre'/`post' {
             local d = `season' * (floor(`e' / `season') + 1)
             if `d' == 0 {
                 matrix `R' = nullmat(`R') \ (0, `e', `e', 0, ., ., ., 0, 0, ., 1)
+                matrix `BS' = nullmat(`BS') \ J(1, `ng', .)
+                matrix `WS' = nullmat(`WS') \ J(1, `ng', .)
                 continue
             }
-            _lpddd_fit __lp_dy if __lp_rel == `e', d(__lp_D) fe(`fe') clv(`clv') ///
-                agg(`aggregate') nst(`ng') `wopt'
+            _lpddd_fit __lp_dy if __lp_rel == `e', `fitopt' `wopt'
             scalar `sb'  = r(b)
             scalar `sse' = r(se)
             scalar `sN'  = r(N)
             scalar `sdf' = r(df)
+            scalar `sncl' = r(ncl)
+            local fitrc = r(rc)
+            matrix `tmpm' = r(bk)
+            matrix `BS' = nullmat(`BS') \ `tmpm'
+            matrix `tmpm' = r(wk)
+            matrix `WS' = nullmat(`WS') \ `tmpm'
+            if `fitrc' != 0 {
+                local lastrc = `fitrc'
+                local ++nfail
+            }
             scalar `st'  = .
             scalar `sp'  = .
             scalar `sll' = .
@@ -394,6 +435,9 @@ program define lpddd, eclass
                 matrix `vv' = nullmat(`vv'), `sse'^2
                 local names `names' `nm'
                 if `sN' > `Nmax' local Nmax = `sN'
+                if `sncl' < . {
+                    if `sncl' > `Nclmax' local Nclmax = `sncl'
+                }
             }
             matrix `R' = nullmat(`R') \ (0, `e', `e', `sb', `sse', `st', `sp', `sll', `sul', `sN', 0)
         }
@@ -410,14 +454,30 @@ program define lpddd, eclass
                     generate byte __lp_D`k' = __lp_D * (__lp_stack == `k')
                 }
             }
+            if "`engine'" == "builtin" {
+                if "`mode'" == "one" egen long __lp_fa = group(__lp_stack `strk')
+                else if "`mode'" == "xt" egen long __lp_fa = group(__lp_stack __lp_g)
+                else egen long __lp_fa = group(__lp_stack __lp_T `strk')
+                if "`mode'" != "one" egen long __lp_fb = group(__lp_stack __lp_Q `strk')
+                if "`mode'" == "xt" xtset __lp_fa
+            }
         }
         forvalues j = 1/`nsp' {
-            _lpddd_fit __lp_sp`j', d(__lp_D) fe(`fe') clv(`clv') ///
-                agg(`aggregate') nst(`ng') `wopt'
+            _lpddd_fit __lp_sp`j', `fitopt' `wopt'
             scalar `sb'  = r(b)
             scalar `sse' = r(se)
             scalar `sN'  = r(N)
             scalar `sdf' = r(df)
+            scalar `sncl' = r(ncl)
+            local fitrc = r(rc)
+            matrix `tmpm' = r(bk)
+            matrix `BS' = nullmat(`BS') \ `tmpm'
+            matrix `tmpm' = r(wk)
+            matrix `WS' = nullmat(`WS') \ `tmpm'
+            if `fitrc' != 0 {
+                local lastrc = `fitrc'
+                local ++nfail
+            }
             scalar `st'  = .
             scalar `sp'  = .
             scalar `sll' = .
@@ -432,6 +492,9 @@ program define lpddd, eclass
                 matrix `vv' = nullmat(`vv'), `sse'^2
                 local names `names' span`j'
                 if `sN' > `Nmax' local Nmax = `sN'
+                if `sncl' < . {
+                    if `sncl' > `Nclmax' local Nclmax = `sncl'
+                }
             }
             matrix `R' = nullmat(`R') \ (1, `a`j'', `b`j'', `sb', `sse', `st', `sp', `sll', `sul', `sN', 0)
         }
@@ -486,30 +549,35 @@ program define lpddd, eclass
         display as text "  stack `k': first treated period " as result "`g'" ///
             as text ", treated observations in the window " as result "`ntr`k''"
     }
+    display as text "Estimation: " as result cond("`engine'" == "reghdfe", "reghdfe", cond("`mode'" == "xt", "xtreg, fe", "regress"))
     display as text "Fixed effects: " as result `"`fe'"'
     display as text "Standard errors clustered by: " as result cond("`cluster'" == "", "`group'", "`cluster'")
 
     if "`table'" != "notable" {
         local nr = rowsof(`R')
-        display _newline as text "{hline 15}{c TT}{hline 66}"
-        display as text %14s "Periods" " {c |}" %11s "Estimate" %11s "Std. err." %9s "t" %9s "P>|t|" ///
-            %12s "[`level'% conf." %11s "interval]" %9s "Obs."
-        display as text "{hline 15}{c +}{hline 66}"
+        display _newline as text "{hline 14}{c TT}{hline 64}"
+        display as text %13s "Periods" " {c |}" %10s "Estimate" %10s "Std. err." %8s "t" %7s "P>|t|" ///
+            %21s "[`level'% conf. interval]" %8s "Obs."
+        display as text "{hline 14}{c +}{hline 64}"
         forvalues i = 1/`nr' {
             if `R'[`i', 1] == 0 local lab = string(`R'[`i', 2])
             else local lab = string(`R'[`i', 2]) + " to " + string(`R'[`i', 3])
             if `R'[`i', 11] == 1 {
-                display as text %14s "`lab'" " {c |}" as text %11s "0" as text "   (reference)"
+                display as text %13s "`lab'" " {c |}" as text %10s "0" as text "  (reference)"
             }
             else {
-                display as text %14s "`lab'" " {c |}" as result %11.4f `R'[`i', 4] %11.4f `R'[`i', 5] ///
-                    %9.2f `R'[`i', 6] %9.3f `R'[`i', 7] %12.4f `R'[`i', 8] %11.4f `R'[`i', 9] %9.0f `R'[`i', 10]
+                display as text %13s "`lab'" " {c |}" as result %10.4f `R'[`i', 4] %10.4f `R'[`i', 5] ///
+                    %8.2f `R'[`i', 6] %7.3f `R'[`i', 7] %10.4f `R'[`i', 8] %11.4f `R'[`i', 9] %8.0f `R'[`i', 10]
             }
             if `i' < `nr' {
-                if `R'[`i', 1] == 0 & `R'[`i' + 1, 1] == 1 display as text "{hline 15}{c +}{hline 66}"
+                if `R'[`i', 1] == 0 & `R'[`i' + 1, 1] == 1 display as text "{hline 14}{c +}{hline 64}"
             }
         }
-        display as text "{hline 15}{c BT}{hline 66}"
+        display as text "{hline 14}{c BT}{hline 64}"
+    }
+    if `nfail' > 0 {
+        display as error "Note: `nfail' regression(s) could not be estimated; last return code r(`lastrc')."
+        if "`engine'" == "builtin" display as error "      With many fixed effects or weights that vary within a group, install reghdfe."
     }
 
     * ------------------------------------------------------------------ stored results
@@ -523,6 +591,11 @@ program define lpddd, eclass
         ereturn post `bb' `VV', obs(`Nmax') depname(`y')
     }
     ereturn matrix results = `R'
+    if "`aggregate'" != "ols" {
+        ereturn matrix stack_b = `BS'
+        ereturn matrix stack_w = `WS'
+    }
+    if `Nclmax' > 0 ereturn scalar N_clust = `Nclmax'
     ereturn scalar n_stacks = `ng'
     ereturn scalar season = `season'
     ereturn scalar pre = `pre'
@@ -536,6 +609,15 @@ program define lpddd, eclass
     ereturn local design = cond("`dd'" != "", "dd", "ddd")
     ereturn local clustvar = cond("`cluster'" == "", "`group'", "`cluster'")
     ereturn local depvar "`y'"
+    if "`weight'" != "" {
+        ereturn local wtype "`weight'"
+        ereturn local wexp "`exp'"
+    }
+    ereturn local engine "`engine'"
+    ereturn local vce "cluster"
+    ereturn local vcetype "Robust"
+    if "`dd'" != "" ereturn local title "Stacked local-projection difference-in-differences"
+    else ereturn local title "Stacked local-projection triple differences"
     ereturn local cmdline `"`cmdline'"'
     ereturn local cmd "lpddd"
 end
@@ -543,66 +625,93 @@ end
 
 * one regression: the coefficient on the treatment indicator, or an explicitly
 * weighted average of stack-specific coefficients estimated in one regression
+* (the average and its variance are computed from e(b) and e(V) in double precision)
 program define _lpddd_fit, rclass
-    version 14.0
-    syntax varname [if] , d(varname) fe(string) clv(varname) agg(string) nst(integer) [ wtype(string) ]
+    version 15.1
+    syntax varname [if] , d(varname) clv(varname) agg(string) nst(integer) ///
+        engine(string) mode(string) [ fe(string) wtype(string) ]
     local wx ""
     if "`wtype'" != "" local wx "[`wtype' = __lp_w]"
-    tempname b se N df
+    tempname b se N df ncl bk wk bf Vf tot est var
     scalar `b' = .
     scalar `se' = .
     scalar `N' = .
     scalar `df' = .
-    if "`agg'" == "ols" {
-        capture reghdfe `varlist' `d' `if' `wx', absorb(`fe') vce(cluster `clv')
-        if _rc == 0 {
-            scalar `N' = e(N)
-            scalar `df' = e(df_r)
-            capture scalar `b' = _b[`d']
-            if _rc == 0 scalar `se' = _se[`d']
+    scalar `ncl' = .
+    matrix `bk' = J(1, `nst', .)
+    matrix `wk' = J(1, `nst', .)
+
+    if "`agg'" == "ols" local x "`d'"
+    else {
+        local x ""
+        forvalues k = 1/`nst' {
+            local x `x' __lp_D`k'
         }
     }
+    if "`engine'" == "reghdfe" {
+        capture reghdfe `varlist' `x' `if' `wx', absorb(`fe') vce(cluster `clv')
+    }
+    else if "`mode'" == "xt" {
+        capture xtreg `varlist' `x' i.__lp_fb `if' `wx', fe vce(cluster `clv') nonest
+    }
+    else if "`mode'" == "two" {
+        capture regress `varlist' `x' i.__lp_fa i.__lp_fb `if' `wx', vce(cluster `clv')
+    }
     else {
-        local dl ""
-        forvalues k = 1/`nst' {
-            local dl `dl' __lp_D`k'
+        capture regress `varlist' `x' i.__lp_fa `if' `wx', vce(cluster `clv')
+    }
+    local rc = _rc
+
+    if `rc' == 0 {
+        scalar `N' = e(N)
+        scalar `df' = e(df_r)
+        scalar `ncl' = e(N_clust)
+        if "`agg'" == "ols" {
+            capture scalar `b' = _b[`d']
+            if _rc == 0 scalar `se' = _se[`d']
+            else scalar `b' = .
         }
-        capture reghdfe `varlist' `dl' `if' `wx', absorb(`fe') vce(cluster `clv')
-        if _rc == 0 {
-            scalar `N' = e(N)
-            scalar `df' = e(df_r)
+        else {
+            matrix `bf' = e(b)
+            matrix `Vf' = e(V)
+            local cn : colnames `bf'
             tempvar es
             quietly generate byte `es' = e(sample)
-            local tot 0
+            scalar `tot' = 0
             forvalues k = 1/`nst' {
-                local w`k' 0
-                tempname sek
-                capture scalar `sek' = _se[__lp_D`k']
-                if _rc == 0 {
-                    if `sek' > 0 & `sek' < . {
-                        if "`agg'" == "equal" local w`k' 1
+                matrix `wk'[1, `k'] = 0
+                local nm : word `k' of `cn'
+                local base = substr("`nm'", strrpos("`nm'", ".") + 1, .)
+                if "`base'" == "__lp_D`k'" {
+                    if `Vf'[`k', `k'] > 0 & `Vf'[`k', `k'] < . {
+                        matrix `bk'[1, `k'] = `bf'[1, `k']
+                        if "`agg'" == "equal" matrix `wk'[1, `k'] = 1
                         else {
                             quietly count if `es' & __lp_D`k' == 1
-                            local w`k' = r(N)
+                            matrix `wk'[1, `k'] = r(N)
+                        }
+                        scalar `tot' = `tot' + `wk'[1, `k']
+                    }
+                }
+            }
+            if `tot' > 0 {
+                scalar `est' = 0
+                scalar `var' = 0
+                forvalues k = 1/`nst' {
+                    matrix `wk'[1, `k'] = `wk'[1, `k'] / `tot'
+                }
+                forvalues k = 1/`nst' {
+                    if `wk'[1, `k'] > 0 {
+                        scalar `est' = `est' + `wk'[1, `k'] * `bf'[1, `k']
+                        forvalues l = 1/`nst' {
+                            if `wk'[1, `l'] > 0 {
+                                scalar `var' = `var' + `wk'[1, `k'] * `wk'[1, `l'] * `Vf'[`k', `l']
+                            }
                         }
                     }
                 }
-                local tot = `tot' + `w`k''
-            }
-            if `tot' > 0 {
-                local expr ""
-                forvalues k = 1/`nst' {
-                    if `w`k'' > 0 {
-                        local c = `w`k'' / `tot'
-                        if "`expr'" == "" local expr "`c' * _b[__lp_D`k']"
-                        else local expr "`expr' + `c' * _b[__lp_D`k']"
-                    }
-                }
-                capture lincom `expr'
-                if _rc == 0 {
-                    scalar `b' = r(estimate)
-                    scalar `se' = r(se)
-                }
+                scalar `b' = `est'
+                scalar `se' = sqrt(`var')
             }
         }
     }
@@ -610,11 +719,15 @@ program define _lpddd_fit, rclass
     return scalar se = `se'
     return scalar N = `N'
     return scalar df = `df'
+    return scalar ncl = `ncl'
+    return scalar rc = `rc'
+    return matrix bk = `bk'
+    return matrix wk = `wk'
 end
 
 
 program define _lpddd_parsesave, rclass
-    version 14.0
+    version 15.1
     syntax anything(name=fn) [, replace]
     return local file `"`fn'"'
     return local replace "`replace'"
