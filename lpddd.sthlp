@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.1.1  22nov2026}{...}
+{* *! version 0.2.2  22nov2026}{...}
 {viewerjumpto "Syntax" "lpddd##syntax"}{...}
 {viewerjumpto "Description" "lpddd##description"}{...}
 {viewerjumpto "Options" "lpddd##options"}{...}
@@ -55,6 +55,7 @@
 {synopt:{opt agg:regate(ols|cohort|equal)}}how the stacks are combined; default {cmd:ols}{p_end}
 {synopt:{opth cl:uster(varname)}}cluster variable; default is {opt group()}{p_end}
 {synopt:{opt eng:ine(reghdfe|builtin)}}estimation command; default is {cmd:reghdfe} if installed, otherwise built-in commands{p_end}
+{synopt:{opt nocov}}do not compute the covariances between the estimates (faster){p_end}
 
 {syntab:Reporting}
 {synopt:{opt l:evel(#)}}confidence level; default {cmd:level(95)}{p_end}
@@ -226,12 +227,20 @@ stacks; clustering by {opt group()} or a coarser variable accounts for this.
 
 {phang}
 {opt engine(reghdfe)} estimates with {cmd:reghdfe}; {opt engine(builtin)} uses
-{cmd:regress}, or {cmd:xtreg, fe} with {opt gfe}. The coefficients are the same. Standard
-errors can differ slightly because the commands count degrees of freedom differently.
+{cmd:regress}, or {cmd:xtreg, fe} with {opt gfe}. The coefficients are the same, and so
+are the standard errors: with {opt gfe} the variance from {cmd:xtreg, fe} is rescaled to
+the count of degrees of freedom that {cmd:reghdfe} uses. The one exception is {opt gfe}
+with a {opt cluster()} variable in which the groups are not nested, where the standard
+errors of the two can differ slightly.
 With {opt engine(builtin)} the fixed effects other than the group effects enter as
 indicator variables, so many strata need a large {cmd:matsize} in Stata 15, and with
 {opt gfe} weights must be constant within a group. A note is shown if a regression
 could not be estimated.
+
+{phang}
+{opt nocov} skips the covariances between the estimates of different periods and spans.
+{cmd:e(V)} is then diagonal, the joint test is not reported, and the command runs about
+twice as fast.
 
 {dlgtab:Reporting}
 
@@ -264,6 +273,19 @@ there. The seasonal base period and the spans are additions of this command.
 The estimates rest on the assumption that, without treatment, the difference between
 eligible and ineligible units would have moved in the same way in treated and control
 groups, and that ineligible units and control groups are not affected by the treatment.
+
+{pstd}
+Standard errors are clustered (by {opt group()} unless {opt cluster()} is given), which
+accounts for control groups that appear in several stacks. The estimates of different
+periods come from different regressions on the same clusters, so they are correlated.
+{cmd:lpddd} computes their covariances from the sum, within each cluster, of the influence
+of every observation on every estimate, and scales them so that the diagonal of
+{cmd:e(V)} holds the variances reported by the regressions. Joint tests are therefore
+valid: the table reports a test that all estimates before treatment are zero, and
+{cmd:test} and {cmd:lincom} can be used afterwards, for example
+{cmd:test p12 = p24} or {cmd:lincom (p3 + p4 + p5) / 3}. The correlation between two
+estimates is the one a single regression on both periods, with every term interacted with
+the period, would give.
 
 
 {marker examples}{...}
@@ -299,6 +321,10 @@ groups, and that ineligible units and control groups are not affected by the tre
 {synopt:{cmd:e(pre)}}periods before treatment{p_end}
 {synopt:{cmd:e(post)}}periods after treatment{p_end}
 {synopt:{cmd:e(level)}}confidence level{p_end}
+{synopt:{cmd:e(df_r)}}degrees of freedom of tests: clusters minus one{p_end}
+{synopt:{cmd:e(F_pre)}}F statistic of the joint test that the estimates before treatment are zero{p_end}
+{synopt:{cmd:e(df_pre)}}number of estimates tested{p_end}
+{synopt:{cmd:e(p_pre)}}p-value of this test{p_end}
 
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:lpddd}{p_end}
@@ -314,6 +340,7 @@ groups, and that ineligible units and control groups are not affected by the tre
 {synopt:{cmd:e(vce)}}{cmd:cluster}{p_end}
 {synopt:{cmd:e(vcetype)}}{cmd:Robust}{p_end}
 {synopt:{cmd:e(engine)}}{cmd:reghdfe} or {cmd:builtin}{p_end}
+{synopt:{cmd:e(vfull)}}{cmd:full} if {cmd:e(V)} holds the covariances, {cmd:diagonal} otherwise{p_end}
 {synopt:{cmd:e(wtype)}}weight type{p_end}
 {synopt:{cmd:e(wexp)}}weight expression{p_end}
 {synopt:{cmd:e(title)}}title of the estimation{p_end}
@@ -321,13 +348,17 @@ groups, and that ineligible units and control groups are not affected by the tre
 
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}estimates; names m{it:#} (period -#), p{it:#} (period +#), span{it:#}{p_end}
-{synopt:{cmd:e(V)}}variances on the diagonal; the estimates come from separate regressions, so covariances are not available{p_end}
+{synopt:{cmd:e(V)}}variances and covariances of the estimates (diagonal with {opt nocov}){p_end}
 {synopt:{cmd:e(results)}}one row per period or span: type, from, to, b, se, t, p, ll, ul, N, ref{p_end}
 {synopt:{cmd:e(stack_b)}}with {opt aggregate(cohort)} or {opt aggregate(equal)}: estimate of each stack, one row per row of {cmd:e(results)}{p_end}
 {synopt:{cmd:e(stack_w)}}the weights given to the stacks{p_end}
 
+{p2col 5 20 24 2: Functions}{p_end}
+{synopt:{cmd:e(sample)}}marks the observations of the units that entered at least one regression, in the periods of the stacks in which they are used{p_end}
+
 {pstd}
-{cmd:e(sample)} is not set: the estimates come from many regressions on the stacked data, not on the data in memory.
+{cmd:e(N)} counts rows of the stacked data, in which a control unit appears once per stack,
+so it can differ from the number of observations marked by {cmd:e(sample)}.
 
 
 {marker references}{...}

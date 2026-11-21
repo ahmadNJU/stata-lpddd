@@ -1,4 +1,4 @@
 v 3
 d lpddd: stacked local-projection triple differences for Stata
-d [Author name], [Affiliation]
+d Ahmad Nawaz, Nanjing University, China; University of Sahiwal, Pakistan
 p lpddd  Stacked local-projection triple differences with a seasonal base period

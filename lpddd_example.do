@@ -1,5 +1,5 @@
 *==============================================================================================
-* lpddd_example.do     example and tests for lpddd 0.1.1 (22 November 2026)
+* lpddd_example.do     example and tests for lpddd 0.2.2 (22 November 2026)
 *
 * Run in Stata:   do lpddd_example.do
 * Needs:          lpddd. Tests 3 and 6 need reghdfe and ftools and are skipped without them;
@@ -13,7 +13,7 @@
 * and the taxed products have their own trend: a difference-in-differences is biased by
 * these trends, the triple difference is not.
 *
-* Tests 2, 3, 6 and 7 stop with an error if lpddd does not reproduce the estimate it is
+* Tests 2, 3, 6, 7 and 8 stop with an error if lpddd does not reproduce the estimate it is
 * compared with.
 *==============================================================================================
 version 15.1
@@ -168,15 +168,16 @@ else display as text "lpdid is not installed; comparison skipped (ssc install lp
 use `sim', clear
 
 *----------------------------------------------------------------------------------------------
-* 6. Built-in commands against reghdfe: the coefficients must agree; the standard errors are
-*    displayed and their relative difference is reported (they can differ slightly through
-*    the count of degrees of freedom)
+* 6. Built-in commands against reghdfe for five specifications: the coefficients and the
+*    standard errors must agree
 *----------------------------------------------------------------------------------------------
 if `has_reghdfe' {
-    forvalues s = 1/3 {
+    forvalues s = 1/5 {
         if `s' == 1 local spec ""
         if `s' == 2 local spec "gfe strata(chapter)"
         if `s' == 3 local spec "strata(chapter) aggregate(cohort)"
+        if `s' == 4 local spec "gfe"
+        if `s' == 5 local spec "gfe strata(chapter) aggregate(cohort)"
         lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
             log season(12) noevent spans(12 23) `spec' engine(reghdfe) notable
         matrix A = e(results)
@@ -186,6 +187,7 @@ if `has_reghdfe' {
         display as result "Test 6, specification `s' (`spec'): reghdfe " A[1, 4] " (" A[1, 5] ")   built-in " B[1, 4] " (" B[1, 5] ")"
         display as result "        relative difference: coefficient " reldif(A[1, 4], B[1, 4]) ", standard error " abs(A[1, 5] - B[1, 5]) / abs(A[1, 5])
         assert reldif(A[1, 4], B[1, 4]) < 1e-8
+        assert abs(A[1, 5] - B[1, 5]) / abs(A[1, 5]) < 1e-6
     }
 }
 else display as text "reghdfe is not installed; test 6 skipped"
@@ -218,5 +220,76 @@ forvalues k = 1/3 {
     assert reldif(one`k', S[1, `k']) < 1e-10
 }
 ereturn list
+
+*----------------------------------------------------------------------------------------------
+* 8. Covariances between periods, joint test and e(sample)
+*    a. the diagonal of e(V) must hold the squared standard errors of the table
+*    b. the correlation between the estimates for months 3 and 4 must equal the one from a
+*       single regression on both months, with every term interacted with the month
+*    c. test and lincom must run after lpddd; the joint test of the months before
+*       treatment is displayed
+*    d. with nocov, e(V) is diagonal and the estimates are unchanged
+*----------------------------------------------------------------------------------------------
+lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) pre(24) post(6) spans(3 6) `eng'
+matrix V = e(V)
+matrix R = e(results)
+matrix bfull = e(b)
+display as result "Test 8: e(V) is " e(vfull) ";  joint test before treatment F(" e(df_pre) ", " e(df_r) ") = " e(F_pre) ", p = " e(p_pre)
+assert "`e(vfull)'" == "full"
+forvalues i = 1/`=rowsof(R)' {
+    if R[`i', 1] == 0 & R[`i', 2] == 3 scalar se3 = R[`i', 5]
+    if R[`i', 1] == 0 & R[`i', 2] == 4 scalar se4 = R[`i', 5]
+}
+local j3 = colnumb(V, "p3")
+local j4 = colnumb(V, "p4")
+assert reldif(V[`j3', `j3'], se3^2) < 1e-10
+assert reldif(V[`j4', `j4'], se4^2) < 1e-10
+scalar corr_auto = V[`j3', `j4'] / sqrt(V[`j3', `j3'] * V[`j4', `j4'])
+quietly count if e(sample)
+display as result "        observations marked by e(sample): " r(N) " of " _N
+assert r(N) > 0
+test p3 = p4
+lincom (p3 + p4 + p5) / 3
+test m24 m23 m22 m21 m20 m19 m18 m17 m16 m15 m14 m13
+display as result "        test command, months before treatment: F = " r(F) ", p = " r(p)
+assert reldif(r(F), e(F_pre)) < 1e-8
+
+local k 0
+foreach g in 50 53 56 {
+    local ++k
+    use `sim', clear
+    keep if cohort == `g' | cohort == 0
+    xtset unit t
+    generate double ly = ln(y)
+    generate double dy = ly - L12.ly
+    generate int h = t - `g'
+    keep if h == 3 | h == 4
+    generate byte T = (cohort == `g')
+    generate int stack = `k'
+    tempfile c`k'
+    save `c`k''
+}
+use `c1', clear
+append using `c2'
+append using `c3'
+generate byte D = T * china
+generate byte D3 = D * (h == 3)
+generate byte D4 = D * (h == 4)
+regress dy D3 D4 i.h#i.stack#i.T i.h#i.stack#i.china, vce(cluster product)
+matrix VM = e(V)
+scalar corr_manual = VM[1, 2] / sqrt(VM[1, 1] * VM[2, 2])
+display as result "Test 8: correlation of the estimates for months 3 and 4: lpddd " corr_auto "   one regression " corr_manual
+assert reldif(corr_auto, corr_manual) < 1e-8
+use `sim', clear
+
+lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) pre(24) post(6) spans(3 6) nocov notable `eng'
+matrix V0 = e(V)
+matrix b0 = e(b)
+assert "`e(vfull)'" == "diagonal"
+assert V0[`j3', `j4'] == 0
+assert reldif(V0[`j3', `j3'], se3^2) < 1e-10
+assert mreldif(b0, bfull) < 1e-12
 
 display _newline as result "lpddd_example.do finished: all tests that were run passed."

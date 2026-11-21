@@ -1,4 +1,4 @@
-*! lpddd 0.1.1  22nov2026
+*! lpddd 0.2.2  22nov2026
 *! Stacked local-projection triple differences (and differences-in-differences)
 *! with a seasonal base period and estimates for spans of periods
 *! Uses reghdfe (Correia, SSC) if it is installed; otherwise regress and xtreg
@@ -12,11 +12,12 @@ program define lpddd, eclass
           SEASon(integer 1) SPANs(numlist integer) noEVent LOG IHS     ///
           FILLzero CONTrol(string) GFE STRata(varname) ABSorb(string)  ///
           AGGregate(string) CLuster(varname) Level(cilevel) GRAph      ///
-          ENGine(string)                                               ///
+          ENGine(string) noCOV                                         ///
           SAVing(string asis) noTABle ]
 
     local cmdline `"lpddd `0'"'
     local y `varlist'
+    capture mata: mata drop LPDDD_S LPDDD_U
 
     * ------------------------------------------------------------------ checks
     if !inlist("`engine'", "", "reghdfe", "builtin") {
@@ -237,6 +238,15 @@ program define lpddd, eclass
         quietly egen long __lp_cl = group(`cluster')
         local clv "__lp_cl"
     }
+    * are the groups nested in the clusters? (decides the count of degrees of freedom
+    * that reghdfe uses when the group effects are absorbed)
+    local clnest 1
+    if "`cluster'" != "" {
+        quietly bysort __lp_g (__lp_cl): generate byte __lp_nb = (__lp_cl[1] != __lp_cl[_N])
+        quietly count if __lp_nb
+        if r(N) > 0 local clnest 0
+        drop __lp_nb
+    }
     local wkeep ""
     if "`weight'" != "" {
         quietly generate double __lp_w = `wv'
@@ -284,6 +294,17 @@ program define lpddd, eclass
 
     local carry __lp_u __lp_g __lp_T __lp_Q __lp_D __lp_stack `clv' `wkeep' `strk' `absv'
     local carry : list uniq carry
+
+    * workspace in Mata: sums of the influence of every cluster on every estimate (for the
+    * covariances between estimates) and a marker of the units used (for e(sample))
+    quietly summarize __lp_u, meanonly
+    local Umax = r(max)
+    quietly summarize `clv', meanonly
+    local Gmax = r(max)
+    local nrowR = `nsp'
+    if "`event'" != "noevent" local nrowR = `nrowR' + `pre' + `post' + 1
+    mata: _lpddd_init(`Gmax', `nrowR', `Umax')
+    local dovc = ("`cov'" != "nocov")
 
     tempfile base
     quietly save `base'
@@ -364,13 +385,18 @@ program define lpddd, eclass
     * ------------------------------------------------------------------ estimates
     * columns of the results matrix:
     *   type (0 event time, 1 span), from, to, b, se, t, p, ll, ul, N, ref (1 = reference period)
-    tempname R bb vv sb sse sN sdf sncl st sp sll sul crit BS WS tmpm
+    tempname R bb vv sb sse sN sdf sncl st sp sll sul crit BS WS tmpm sv IX VF bp Vp Vi Wm
+    local row 0
+    local cols ""
+    local vcok 1
+    local prepos ""
+    local nest 0
     local names ""
     local Nmax 0
     local Nclmax 0
     local lastrc 0
     local nfail 0
-    local fitopt d(__lp_D) fe(`fe') clv(`clv') agg(`aggregate') nst(`ng') engine(`engine') mode(`mode')
+    local fitopt d(__lp_D) fe(`fe') clv(`clv') agg(`aggregate') nst(`ng') engine(`engine') mode(`mode') nest(`clnest') dovc(`dovc')
     local wopt ""
     if "`weight'" != "" local wopt "wtype(`weight')"
 
@@ -394,6 +420,7 @@ program define lpddd, eclass
             }
         }
         forvalues e = -`pre'/`post' {
+            local ++row
             local d = `season' * (floor(`e' / `season') + 1)
             if `d' == 0 {
                 matrix `R' = nullmat(`R') \ (0, `e', `e', 0, ., ., ., 0, 0, ., 1)
@@ -401,13 +428,14 @@ program define lpddd, eclass
                 matrix `WS' = nullmat(`WS') \ J(1, `ng', .)
                 continue
             }
-            _lpddd_fit __lp_dy if __lp_rel == `e', `fitopt' `wopt'
+            _lpddd_fit __lp_dy if __lp_rel == `e', `fitopt' `wopt' col(`row')
             scalar `sb'  = r(b)
             scalar `sse' = r(se)
             scalar `sN'  = r(N)
             scalar `sdf' = r(df)
             scalar `sncl' = r(ncl)
             local fitrc = r(rc)
+            local fitvc = r(vc)
             matrix `tmpm' = r(bk)
             matrix `BS' = nullmat(`BS') \ `tmpm'
             matrix `tmpm' = r(wk)
@@ -433,7 +461,12 @@ program define lpddd, eclass
                 else local nm "p`e'"
                 matrix `bb' = nullmat(`bb'), `sb'
                 matrix `vv' = nullmat(`vv'), `sse'^2
+                matrix `sv' = nullmat(`sv'), `sse'
+                matrix `IX' = nullmat(`IX'), `row'
                 local names `names' `nm'
+                local ++nest
+                if `e' < 0 local prepos `prepos' `nest'
+                if `fitvc' == 0 local vcok 0
                 if `sN' > `Nmax' local Nmax = `sN'
                 if `sncl' < . {
                     if `sncl' > `Nclmax' local Nclmax = `sncl'
@@ -463,13 +496,15 @@ program define lpddd, eclass
             }
         }
         forvalues j = 1/`nsp' {
-            _lpddd_fit __lp_sp`j', `fitopt' `wopt'
+            local ++row
+            _lpddd_fit __lp_sp`j', `fitopt' `wopt' col(`row')
             scalar `sb'  = r(b)
             scalar `sse' = r(se)
             scalar `sN'  = r(N)
             scalar `sdf' = r(df)
             scalar `sncl' = r(ncl)
             local fitrc = r(rc)
+            local fitvc = r(vc)
             matrix `tmpm' = r(bk)
             matrix `BS' = nullmat(`BS') \ `tmpm'
             matrix `tmpm' = r(wk)
@@ -490,7 +525,11 @@ program define lpddd, eclass
                 scalar `sul'  = `sb' + `crit' * `sse'
                 matrix `bb' = nullmat(`bb'), `sb'
                 matrix `vv' = nullmat(`vv'), `sse'^2
+                matrix `sv' = nullmat(`sv'), `sse'
+                matrix `IX' = nullmat(`IX'), `row'
                 local names `names' span`j'
+                local ++nest
+                if `fitvc' == 0 local vcok 0
                 if `sN' > `Nmax' local Nmax = `sN'
                 if `sncl' < . {
                     if `sncl' > `Nclmax' local Nclmax = `sncl'
@@ -500,6 +539,46 @@ program define lpddd, eclass
         }
     }
     matrix colnames `R' = type from to b se t p ll ul N ref
+
+    * ------------------------------------------------------------------ covariance matrix
+    * full matrix from the sums by cluster of the influence of every observation on every
+    * estimate; the diagonal is the variance reported by each regression
+    local fullv 0
+    local Fpre = .
+    local ppre = .
+    local qpre 0
+    local dfr = .
+    if `Nclmax' > 1 local dfr = `Nclmax' - 1
+    if `nest' > 0 {
+        if `dovc' & `vcok' {
+            mata: _lpddd_V("`IX'", "`sv'", "`VF'")
+            local fullv 1
+        }
+        else matrix `VF' = diag(`vv')
+        * joint test that the estimates for the periods before treatment are zero
+        local np : word count `prepos'
+        if `fullv' & `np' > 0 & `dfr' < . {
+            matrix `bp' = J(1, `np', 0)
+            matrix `Vp' = J(`np', `np', 0)
+            local i 0
+            foreach pi of local prepos {
+                local ++i
+                matrix `bp'[1, `i'] = `bb'[1, `pi']
+                local j 0
+                foreach pj of local prepos {
+                    local ++j
+                    matrix `Vp'[`i', `j'] = `VF'[`pi', `pj']
+                }
+            }
+            matrix `Vi' = syminv(`Vp')
+            local qpre = `np' - diag0cnt(`Vi')
+            if `qpre' > 0 {
+                matrix `Wm' = `bp' * `Vi' * `bp''
+                local Fpre = `Wm'[1, 1] / `qpre'
+                local ppre = Ftail(`qpre', `dfr', `Fpre')
+            }
+        }
+    }
 
     * ------------------------------------------------------------------ results as data: graph, saving
     if "`graph'" != "" | `"`savefile'"' != "" {
@@ -528,12 +607,33 @@ program define lpddd, eclass
                        xline(-0.5, lcolor(gs8) lpattern(shortdash))                     ///
                        xtitle("Periods from the first period of treatment")             ///
                        ytitle("Estimate")                                               ///
-                       legend(order(2 "Estimate" 1 "`level' percent interval") rows(1)) ///
+                       legend(order(2 "Estimate" 1 "`level' percent interval") rows(1) position(6)) ///
                        graphregion(color(white))
             }
         }
     }
     restore
+
+    * ------------------------------------------------------------------ e(sample)
+    * observations of the units that entered at least one regression, in the periods of the
+    * stacks in which these units are used
+    tempvar uu esamp inwin
+    quietly egen long `uu' = group(`unit') if `touse'
+    quietly generate byte `esamp' = 0
+    mata: _lpddd_esample("`uu'", "`esamp'")
+    quietly generate byte `inwin' = 0
+    foreach g of local glist {
+        if "`control'" == "never" {
+            quietly replace `inwin' = 1 if `esamp' == 1 & inrange(`time' - `g', `lo', `hi') ///
+                & (`cohort' == `g' | missing(`cohort') | `cohort' == 0)
+        }
+        else {
+            quietly replace `inwin' = 1 if `esamp' == 1 & inrange(`time' - `g', `lo', `hi') ///
+                & (`cohort' == `g' | missing(`cohort') | `cohort' == 0 | `cohort' > `g' + `hi')
+        }
+    }
+    quietly replace `esamp' = `inwin'
+    capture mata: mata drop LPDDD_S LPDDD_U
 
     * ------------------------------------------------------------------ display
     local design "triple difference (treated group x eligible unit)"
@@ -574,6 +674,14 @@ program define lpddd, eclass
             }
         }
         display as text "{hline 14}{c BT}{hline 64}"
+        if `Fpre' < . {
+            display as text "Joint test that the `qpre' estimates before treatment are zero: F(" ///
+                as result "`qpre'" as text ", " as result "`dfr'" as text ") = " as result %6.2f `Fpre' ///
+                as text ", P = " as result %5.3f `ppre'
+        }
+    }
+    if `nest' > 0 & !`fullv' & `dovc' {
+        display as text "Note: the covariances between the estimates could not be computed; e(V) is diagonal."
     }
     if `nfail' > 0 {
         display as error "Note: `nfail' regression(s) could not be estimated; last return code r(`lastrc')."
@@ -583,12 +691,11 @@ program define lpddd, eclass
     * ------------------------------------------------------------------ stored results
     ereturn clear
     if "`names'" != "" {
-        tempname VV
-        matrix `VV' = diag(`vv')
         matrix colnames `bb' = `names'
-        matrix colnames `VV' = `names'
-        matrix rownames `VV' = `names'
-        ereturn post `bb' `VV', obs(`Nmax') depname(`y')
+        matrix colnames `VF' = `names'
+        matrix rownames `VF' = `names'
+        if `dfr' < . ereturn post `bb' `VF', obs(`Nmax') depname(`y') esample(`esamp') dof(`dfr')
+        else ereturn post `bb' `VF', obs(`Nmax') depname(`y') esample(`esamp')
     }
     ereturn matrix results = `R'
     if "`aggregate'" != "ols" {
@@ -597,6 +704,12 @@ program define lpddd, eclass
     }
     if `Nclmax' > 0 ereturn scalar N_clust = `Nclmax'
     ereturn scalar n_stacks = `ng'
+    if `Fpre' < . {
+        ereturn scalar F_pre = `Fpre'
+        ereturn scalar df_pre = `qpre'
+        ereturn scalar p_pre = `ppre'
+    }
+    ereturn local vfull = cond(`fullv', "full", "diagonal")
     ereturn scalar season = `season'
     ereturn scalar pre = `pre'
     ereturn scalar post = `post'
@@ -629,10 +742,16 @@ end
 program define _lpddd_fit, rclass
     version 15.1
     syntax varname [if] , d(varname) clv(varname) agg(string) nst(integer) ///
-        engine(string) mode(string) [ fe(string) wtype(string) ]
+        engine(string) mode(string) [ fe(string) wtype(string) nest(integer 0) ///
+          col(integer 0) dovc(integer 0) ]
     local wx ""
     if "`wtype'" != "" local wx "[`wtype' = __lp_w]"
-    tempname b se N df ncl bk wk bf Vf tot est var
+    tempname b se N df ncl bk wk bf Vf tot est var adj om Am Ai cm
+    tempvar eps smp zz psi
+    local resok 0
+    local vc 0
+    local wmul ""
+    if "`wtype'" != "" local wmul "* __lp_w"
     scalar `b' = .
     scalar `se' = .
     scalar `N' = .
@@ -648,19 +767,88 @@ program define _lpddd_fit, rclass
             local x `x' __lp_D`k'
         }
     }
+    * the residuals are kept for the covariances between estimates (dovc)
     if "`engine'" == "reghdfe" {
-        capture reghdfe `varlist' `x' `if' `wx', absorb(`fe') vce(cluster `clv')
-    }
-    else if "`mode'" == "xt" {
-        capture xtreg `varlist' `x' i.__lp_fb `if' `wx', fe vce(cluster `clv') nonest
-    }
-    else if "`mode'" == "two" {
-        capture regress `varlist' `x' i.__lp_fa i.__lp_fb `if' `wx', vce(cluster `clv')
+        if `dovc' {
+            capture reghdfe `varlist' `x' `if' `wx', absorb(`fe') vce(cluster `clv') residuals(`eps')
+            local rc = _rc
+            if `rc' == 0 local resok 1
+            else {
+                capture drop `eps'
+                capture reghdfe `varlist' `x' `if' `wx', absorb(`fe') vce(cluster `clv')
+                local rc = _rc
+            }
+        }
+        else {
+            capture reghdfe `varlist' `x' `if' `wx', absorb(`fe') vce(cluster `clv')
+            local rc = _rc
+        }
     }
     else {
-        capture regress `varlist' `x' i.__lp_fa `if' `wx', vce(cluster `clv')
+        * observations alone in a cell of a fixed effect carry no information; reghdfe drops
+        * them, repeatedly, and so do the built-in commands here, so that the number of
+        * observations, of clusters and the standard errors are the same
+        marksample touse
+        if "`wtype'" != "" quietly replace `touse' = 0 if missing(__lp_w) | __lp_w <= 0
+        local flist "__lp_fa"
+        if "`mode'" != "one" local flist "__lp_fa __lp_fb"
+        local changed 1
+        while `changed' {
+            local changed 0
+            foreach f of local flist {
+                tempvar nn
+                quietly egen long `nn' = total(`touse'), by(`f')
+                quietly count if `touse' & `nn' == 1
+                if r(N) > 0 {
+                    quietly replace `touse' = 0 if `touse' & `nn' == 1
+                    local changed 1
+                }
+                drop `nn'
+            }
+        }
+        if "`mode'" == "xt" {
+            capture xtreg `varlist' `x' i.__lp_fb if `touse' `wx', fe vce(cluster `clv') nonest
+        }
+        else if "`mode'" == "two" {
+            capture regress `varlist' `x' i.__lp_fa i.__lp_fb if `touse' `wx', vce(cluster `clv')
+        }
+        else {
+            capture regress `varlist' `x' i.__lp_fa if `touse' `wx', vce(cluster `clv')
+        }
+        local rc = _rc
+        if `rc' == 0 & `dovc' {
+            if "`mode'" == "xt" capture predict double `eps' if e(sample), e
+            else capture predict double `eps' if e(sample), residuals
+            if _rc == 0 local resok 1
+        }
     }
-    local rc = _rc
+    if `rc' == 0 {
+        quietly generate byte `smp' = e(sample)
+        mata: _lpddd_mark("__lp_u", "`smp'")
+    }
+
+    * xtreg, fe counts only the identified indicator variables among the degrees of
+    * freedom; reghdfe, with group effects nested in the clusters, counts every level
+    * of the other fixed effect but one. The variance is rescaled to the count of
+    * reghdfe so that the two engines report the same standard errors.
+    scalar `adj' = 1
+    if `rc' == 0 & "`engine'" != "reghdfe" & "`mode'" == "xt" & `nest' == 1 {
+        matrix `bf' = e(b)
+        _ms_omit_info `bf'
+        local kx = colsof(`bf') - r(k_omit)
+        matrix `om' = r(omit)
+        local nx : word count `x'
+        local kreg 0
+        forvalues k = 1/`nx' {
+            if `om'[1, `k'] == 0 local ++kreg
+        }
+        quietly levelsof __lp_fb if e(sample), local(lv)
+        local nl : word count `lv'
+        local kr = `kreg' + `nl'
+        if e(N) - `kr' > 0 & e(N) - `kx' > 0 {
+            scalar `adj' = (e(N) - `kx') / (e(N) - `kr')
+        }
+    }
 
     if `rc' == 0 {
         scalar `N' = e(N)
@@ -668,12 +856,12 @@ program define _lpddd_fit, rclass
         scalar `ncl' = e(N_clust)
         if "`agg'" == "ols" {
             capture scalar `b' = _b[`d']
-            if _rc == 0 scalar `se' = _se[`d']
+            if _rc == 0 scalar `se' = _se[`d'] * sqrt(`adj')
             else scalar `b' = .
         }
         else {
             matrix `bf' = e(b)
-            matrix `Vf' = e(V)
+            matrix `Vf' = e(V) * `adj'
             local cn : colnames `bf'
             tempvar es
             quietly generate byte `es' = e(sample)
@@ -715,6 +903,62 @@ program define _lpddd_fit, rclass
             }
         }
     }
+    * influence of every observation on the estimate, summed by cluster in Mata:
+    *   estimate = c * inv(X'WX) * X'W y, with X the treatment indicators after the fixed
+    *   effects are removed; influence of observation i = c * inv(X'WX) * x_i * w_i * e_i
+    if `rc' == 0 & `dovc' & `resok' & `col' > 0 & `se' > 0 & `se' < . {
+        local ok 1
+        local rlist ""
+        local i 0
+        foreach v of local x {
+            local ++i
+            tempvar r`i'
+            if "`engine'" == "reghdfe" {
+                capture reghdfe `v' if `smp' `wx', absorb(`fe') residuals(`r`i'')
+            }
+            else if "`mode'" == "xt" {
+                capture xtreg `v' i.__lp_fb if `smp' `wx', fe
+                if _rc == 0 capture predict double `r`i'' if `smp', e
+            }
+            else if "`mode'" == "two" {
+                capture regress `v' i.__lp_fa i.__lp_fb if `smp' `wx'
+                if _rc == 0 capture predict double `r`i'' if `smp', residuals
+            }
+            else {
+                capture regress `v' i.__lp_fa if `smp' `wx'
+                if _rc == 0 capture predict double `r`i'' if `smp', residuals
+            }
+            if _rc != 0 local ok 0
+            local rlist `rlist' `r`i''
+        }
+        if `ok' {
+            if "`agg'" == "ols" {
+                quietly generate double `zz' = `r1'^2 `wmul' if `smp'
+                quietly summarize `zz', meanonly
+                if r(sum) > 0 & r(sum) < . quietly replace `zz' = `r1' / r(sum) if `smp'
+                else local ok 0
+            }
+            else {
+                if "`wtype'" != "" capture matrix accum `Am' = `rlist' if `smp' [iweight = __lp_w], noconstant
+                else capture matrix accum `Am' = `rlist' if `smp', noconstant
+                if _rc != 0 local ok 0
+                else {
+                    matrix `Ai' = syminv(`Am')
+                    matrix `cm' = `wk' * `Ai'
+                    quietly generate double `zz' = 0 if `smp'
+                    forvalues k = 1/`nst' {
+                        quietly replace `zz' = `zz' + `cm'[1, `k'] * `r`k'' if `smp'
+                    }
+                }
+            }
+        }
+        if `ok' {
+            quietly generate double `psi' = `zz' * `eps' `wmul' if `smp'
+            mata: _lpddd_acc("`psi'", "`clv'", "`smp'", `col')
+            local vc 1
+        }
+    }
+    return scalar vc = `vc'
     return scalar b = `b'
     return scalar se = `se'
     return scalar N = `N'
@@ -731,4 +975,75 @@ program define _lpddd_parsesave, rclass
     syntax anything(name=fn) [, replace]
     return local file `"`fn'"'
     return local replace "`replace'"
+end
+
+
+* ---------------------------------------------------------------------- Mata
+version 15.1
+mata:
+mata set matastrict off
+
+void _lpddd_init(real scalar ncl, real scalar nc, real scalar nu)
+{
+    external real matrix LPDDD_S
+    external real colvector LPDDD_U
+    LPDDD_S = J(ncl, nc, 0)
+    LPDDD_U = J(nu, 1, 0)
+}
+
+void _lpddd_mark(string scalar uvar, string scalar touse)
+{
+    external real colvector LPDDD_U
+    real colvector u
+    u = st_data(., uvar, touse)
+    if (rows(u) > 0) LPDDD_U[u] = J(rows(u), 1, 1)
+}
+
+void _lpddd_acc(string scalar psi, string scalar cl, string scalar touse, real scalar col)
+{
+    external real matrix LPDDD_S
+    real matrix X
+    real scalar i
+    X = st_data(., (psi, cl), touse)
+    for (i = 1; i <= rows(X); i++) {
+        if (X[i, 1] < . & X[i, 2] < .) {
+            LPDDD_S[X[i, 2], col] = LPDDD_S[X[i, 2], col] + X[i, 1]
+        }
+    }
+}
+
+void _lpddd_V(string scalar ixname, string scalar sename, string scalar vname)
+{
+    external real matrix LPDDD_S
+    real rowvector ix, se, ss, c
+    real matrix S, V
+    real scalar j
+    ix = st_matrix(ixname)
+    se = st_matrix(sename)
+    S = LPDDD_S[., ix]
+    ss = colsum(S:^2)
+    c = J(1, cols(S), 0)
+    for (j = 1; j <= cols(S); j++) {
+        if (ss[j] > 0) c[j] = se[j] / sqrt(ss[j])
+    }
+    V = quadcross(S, S) :* (c' * c)
+    V = (V + V') / 2
+    for (j = 1; j <= cols(S); j++) {
+        V[j, j] = se[j]^2
+    }
+    st_matrix(vname, V)
+}
+
+void _lpddd_esample(string scalar uvar, string scalar outvar)
+{
+    external real colvector LPDDD_U
+    real colvector u, res
+    real scalar i
+    u = st_data(., uvar)
+    res = J(rows(u), 1, 0)
+    for (i = 1; i <= rows(u); i++) {
+        if (u[i] < . & u[i] <= rows(LPDDD_U)) res[i] = LPDDD_U[u[i]]
+    }
+    st_store(., outvar, res)
+}
 end
