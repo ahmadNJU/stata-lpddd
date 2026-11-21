@@ -1,0 +1,29 @@
+v 3
+d lpddd: stacked local-projection triple differences with a seasonal base period
+d
+d lpddd estimates the dynamic effect of a treatment that starts at different
+d dates for different groups and affects only some units within a treated
+d group. It stacks each treated cohort with clean control groups, runs one
+d regression per period relative to treatment (local projections) and takes a
+d triple difference (treated group x eligible unit). With season() each period
+d is compared with the same season before treatment. With spans() effects are
+d estimated for spans of periods. A difference-in-differences is available
+d with the option dd.
+d
+d Requires: Stata version 14 and reghdfe, ftools from SSC
+d
+d KW: local projections
+d KW: triple difference
+d KW: difference-in-differences
+d KW: stacked regression
+d KW: event study
+d KW: seasonality
+d
+d Author: [Author name], [Affiliation]
+d Support: [E-mail]
+d
+d Distribution-Date: 20261122
+d
+f lpddd.ado
+f lpddd.sthlp
+f lpddd_example.do
