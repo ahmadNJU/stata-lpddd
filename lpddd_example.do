@@ -1,5 +1,5 @@
 *==============================================================================================
-* lpddd_example.do     example and tests for lpddd 0.2.2 (22 November 2026)
+* lpddd_example.do     example and tests for lpddd 0.4.0 (22 November 2026)
 *
 * Run in Stata:   do lpddd_example.do
 * Needs:          lpddd. Tests 3 and 6 need reghdfe and ftools and are skipped without them;
@@ -13,7 +13,7 @@
 * and the taxed products have their own trend: a difference-in-differences is biased by
 * these trends, the triple difference is not.
 *
-* Tests 2, 3, 6, 7 and 8 stop with an error if lpddd does not reproduce the estimate it is
+* Tests 2, 3, 6, 7, 8, 9 and 10 stop with an error if lpddd does not reproduce the estimate it is
 * compared with.
 *==============================================================================================
 version 15.1
@@ -291,5 +291,150 @@ assert "`e(vfull)'" == "diagonal"
 assert V0[`j3', `j4'] == 0
 assert reldif(V0[`j3', `j3'], se3^2) < 1e-10
 assert mreldif(b0, bfull) < 1e-12
+
+*----------------------------------------------------------------------------------------------
+* 9. State dependence with by(): the state is the group of chapters (0 = chapters 1 and 2,
+*    1 = chapters 3 to 5); the true effect is the same in both states
+*    a. the estimates by state must equal those of the command run on each state alone
+*    b. the test of equal effects must equal the one of the test command
+*    c. built-in commands and reghdfe must agree
+*----------------------------------------------------------------------------------------------
+generate byte big = (chapter >= 3)
+lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) pre(24) post(6) spans(12 23) by(big) graph `eng'
+matrix RB = e(results)
+matrix H = e(het)
+matrix list H
+ereturn list
+forvalues i = 1/`=rowsof(RB)' {
+    if RB[`i', 1] == 1 & RB[`i', 12] == 1 scalar by1 = RB[`i', 4]
+    if RB[`i', 1] == 1 & RB[`i', 12] == 2 scalar by2 = RB[`i', 4]
+}
+* the observations of the two states add up to those of the regression
+scalar nstate = 0
+forvalues i = 1/`=rowsof(RB)' {
+    if RB[`i', 1] == 1 scalar nstate = nstate + RB[`i', 10]
+}
+display as result "Test 9: observations of the two states together " nstate ",  of the regression " e(N)
+assert nstate == e(N)
+test span1_1 = span1_2
+scalar F_test = r(F)
+assert reldif(F_test, H[rowsof(H), 4]) < 1e-8
+lpddd y if big == 0, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) noevent spans(12 23) notable `eng'
+matrix A = e(results)
+scalar alone1 = A[1, 4]
+lpddd y if big == 1, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) noevent spans(12 23) notable `eng'
+matrix A = e(results)
+scalar alone2 = A[1, 4]
+display as result "Test 9: state 1, by() " by1 "   alone " alone1 ";   state 2, by() " by2 "   alone " alone2
+assert reldif(by1, alone1) < 1e-8
+assert reldif(by2, alone2) < 1e-8
+if `has_reghdfe' {
+    lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+        log season(12) noevent spans(3 11 12 23) gfe strata(chapter) by(big) engine(reghdfe) notable
+    matrix A = e(results)
+    matrix HA = e(het)
+    lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+        log season(12) noevent spans(3 11 12 23) gfe strata(chapter) by(big) engine(builtin) notable
+    matrix B = e(results)
+    matrix HB = e(het)
+    forvalues i = 1/`=rowsof(A)' {
+        display as result "Test 9, row `i': reghdfe " A[`i', 4] " (" A[`i', 5] ")   built-in " B[`i', 4] " (" B[`i', 5] ")"
+        assert reldif(A[`i', 4], B[`i', 4]) < 1e-8
+        assert abs(A[`i', 5] - B[`i', 5]) / abs(A[`i', 5]) < 1e-6
+    }
+    assert mreldif(HA, HB) < 1e-6
+}
+
+*----------------------------------------------------------------------------------------------
+* 10. Coding of the dates and other frequencies
+*    a. months coded as yyyymm: with tcode(yyyymm) the estimates must equal those with the
+*       count of months; without tcode() the command must stop with error 451
+*    b. quarterly data (the months added up to quarters), season(4): against the triple
+*       difference of the four cell means; quarters coded as yyyyq with tcode(yyyyq)
+*    c. annual data (the months added up to years), no season: against the cell means
+*----------------------------------------------------------------------------------------------
+use `sim', clear
+generate long tym = (2011 + floor((t - 1) / 12)) * 100 + month
+generate long cym = 0
+replace cym = (2011 + floor((cohort - 1) / 12)) * 100 + 1 + mod(cohort - 1, 12) if cohort > 0
+lpddd y, unit(unit) time(t) group(product) cohort(cohort) eligible(china) ///
+    log season(12) pre(24) post(6) spans(3 6) notable `eng'
+matrix b_count = e(b)
+lpddd y, unit(unit) time(tym) group(product) cohort(cym) eligible(china) ///
+    log season(12) pre(24) post(6) spans(3 6) tcode(yyyymm) notable `eng'
+matrix b_code = e(b)
+quietly count if e(sample)
+scalar n_es = r(N)
+display as result "Test 10a: largest difference between tcode(yyyymm) and the count of months " mreldif(b_count, b_code) ";  e(sample) " n_es
+assert mreldif(b_count, b_code) < 1e-12
+assert n_es == 26000
+capture noisily lpddd y, unit(unit) time(tym) group(product) cohort(cym) eligible(china) ///
+    log season(12) pre(24) post(6) notable `eng'
+display as result "Test 10a: return code without tcode() " _rc " (451 expected)"
+assert _rc == 451
+
+* quarterly
+use `sim', clear
+generate int q = ceil(t / 3)
+generate int cq = cond(cohort > 0, ceil(cohort / 3), 0)
+collapse (sum) y, by(unit product china chapter q cq)
+lpddd y, unit(unit) time(q) group(product) cohort(cq) eligible(china) ///
+    log season(4) pre(8) post(8) spans(4 7) `eng'
+matrix b_q = e(b)
+lpddd y if cq == 17 | cq == 0, unit(unit) time(q) group(product) cohort(cq) eligible(china) ///
+    log season(4) post(4) notable `eng'
+matrix R = e(results)
+scalar auto_q = .
+forvalues i = 1/`=rowsof(R)' {
+    if R[`i', 1] == 0 & R[`i', 2] == 1 scalar auto_q = R[`i', 4]
+}
+preserve
+keep if cq == 17 | cq == 0
+xtset unit q
+generate double ly = ln(y)
+generate double dy = ly - L4.ly
+keep if q == 18
+generate byte T = (cq == 17)
+quietly regress dy i.T##i.china
+scalar manual_q = _b[1.T#1.china]
+restore
+display as result "Test 10b: quarter 1 after treatment, lpddd " auto_q "   cell means " manual_q
+assert reldif(auto_q, manual_q) < 1e-8
+generate long qcode = (2011 + floor((q - 1) / 4)) * 10 + 1 + mod(q - 1, 4)
+generate long cqcode = cond(cq > 0, (2011 + floor((cq - 1) / 4)) * 10 + 1 + mod(cq - 1, 4), 0)
+lpddd y, unit(unit) time(qcode) group(product) cohort(cqcode) eligible(china) ///
+    log season(4) pre(8) post(8) spans(4 7) tcode(yyyyq) notable `eng'
+matrix b_qcode = e(b)
+assert mreldif(b_q, b_qcode) < 1e-12
+capture noisily lpddd y, unit(unit) time(qcode) group(product) cohort(cqcode) eligible(china) ///
+    log season(4) pre(8) post(8) notable `eng'
+assert _rc == 451
+
+* annual
+use `sim', clear
+generate int yr = 2010 + ceil(t / 12)
+generate int cy = cond(cohort > 0, 2010 + ceil(cohort / 12), 0)
+collapse (sum) y, by(unit product china chapter yr cy)
+lpddd y, unit(unit) time(yr) group(product) cohort(cy) eligible(china) ///
+    log pre(3) post(3) spans(1 3) `eng'
+matrix R = e(results)
+scalar auto_y = .
+forvalues i = 1/`=rowsof(R)' {
+    if R[`i', 1] == 0 & R[`i', 2] == 1 scalar auto_y = R[`i', 4]
+}
+preserve
+xtset unit yr
+generate double ly = ln(y)
+generate double dy = ly - L2.ly
+keep if yr == 2016
+generate byte T = (cy == 2015)
+quietly regress dy i.T##i.china
+scalar manual_y = _b[1.T#1.china]
+restore
+display as result "Test 10c: year 1 after treatment, lpddd " auto_y "   cell means " manual_y
+assert reldif(auto_y, manual_y) < 1e-8
 
 display _newline as result "lpddd_example.do finished: all tests that were run passed."

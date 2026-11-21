@@ -2,7 +2,7 @@
 
 Stacked local-projection triple differences for Stata, with a seasonal base period and estimates for spans of periods.
 
-Version 0.2.2 (22 November 2026). This is a version for testing.
+Version 0.4.0 (22 November 2026). This is a version for testing.
 
 ## What it does
 
@@ -15,6 +15,8 @@ It combines:
 - **Triple difference.** The regressor is treated group x eligible unit; fixed effects remove what is common to a group and to eligible or ineligible units, by stack.
 - **Seasonal base period.** With `season(12)` every month is compared with the same calendar month of the last year before treatment.
 - **Spans.** With `spans()` the outcome is added up over a span of periods (for example months 12 to 23) and compared with the same seasons before treatment.
+- **Any frequency.** Monthly (`season(12)`), quarterly (`season(4)`) or annual data (no season). Dates coded as numbers such as 201807 or 20183, which are not consecutive, are read with `tcode(yyyymm)` or `tcode(yyyyq)`; without it the command stops and explains.
+- **State dependence.** With `by()` the effect is estimated for every state of the groups (for example products with a high or low exposure before the policy) in the same regressions, with a test that the states have the same effect.
 - **Joint inference.** `e(V)` holds the covariances between the estimates of different periods, so the table reports a joint test that the estimates before treatment are zero, and `test` and `lincom` work afterwards.
 
 A difference-in-differences is available with the option `dd`.

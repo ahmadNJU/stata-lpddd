@@ -1,9 +1,11 @@
 {smcl}
-{* *! version 0.2.2  22nov2026}{...}
+{* *! version 0.4.0  22nov2026}{...}
 {viewerjumpto "Syntax" "lpddd##syntax"}{...}
 {viewerjumpto "Description" "lpddd##description"}{...}
 {viewerjumpto "Options" "lpddd##options"}{...}
+{viewerjumpto "Frequency" "lpddd##frequency"}{...}
 {viewerjumpto "Method" "lpddd##method"}{...}
+{viewerjumpto "Checks" "lpddd##checks"}{...}
 {viewerjumpto "Examples" "lpddd##examples"}{...}
 {viewerjumpto "Stored results" "lpddd##results"}{...}
 {viewerjumpto "References" "lpddd##references"}{...}
@@ -40,6 +42,7 @@
 {synopt:{opt pre(#)}}number of periods before treatment in the period-by-period estimates; default 0{p_end}
 {synopt:{opt post(#)}}number of periods after the first treated period; default 0{p_end}
 {synopt:{opt seas:on(#)}}length of the seasonal cycle (12 for monthly data, 4 for quarterly); default 1, no season{p_end}
+{synopt:{opt tc:ode(code)}}how {opt time()} and {opt cohort()} are coded when they are not consecutive integers: {cmd:yyyymm}, {cmd:yyyyq}, {cmd:dmonth}, {cmd:dquarter} or {cmd:dyear}{p_end}
 {synopt:{opth span:s(numlist)}}pairs of first and last period of spans to be estimated as one outcome{p_end}
 {synopt:{opt noev:ent}}do not estimate period by period (only {opt spans()}){p_end}
 
@@ -56,6 +59,7 @@
 {synopt:{opth cl:uster(varname)}}cluster variable; default is {opt group()}{p_end}
 {synopt:{opt eng:ine(reghdfe|builtin)}}estimation command; default is {cmd:reghdfe} if installed, otherwise built-in commands{p_end}
 {synopt:{opt nocov}}do not compute the covariances between the estimates (faster){p_end}
+{synopt:{opth by(varname)}}estimate the effect separately for every state of the groups, and test that the states have the same effect{p_end}
 
 {syntab:Reporting}
 {synopt:{opt l:evel(#)}}confidence level; default {cmd:level(95)}{p_end}
@@ -165,6 +169,27 @@ there indicates different movements before treatment.
 period {it:e} - {it:s}(floor({it:e}/{it:s}) + 1), which lies between -{it:s} and -1.
 
 {phang}
+{opt tcode(code)} tells the command how the dates are coded when {opt time()} is not a
+count of periods. {cmd:lpddd} counts periods as differences of {opt time()}, so the dates
+must rise by one from each period to the next, as Stata monthly ({cmd:%tm}), quarterly
+({cmd:%tq}) and yearly dates do. Dates written as numbers such as 201807 do not: 201812 is
+followed by 201901. With {opt tcode()} the command converts {opt time()} and
+{opt cohort()} itself; the data in memory are not changed. {opt cohort()} must be coded in
+the same way as {opt time()}, with 0 or missing for groups never treated.
+
+{p 8 12 2}{cmd:tcode(yyyymm)}   year and month in one number, for example 201807{p_end}
+{p 8 12 2}{cmd:tcode(yyyyq)}    year and quarter in one number, for example 20183{p_end}
+{p 8 12 2}{cmd:tcode(dmonth)}   monthly data stored as Stata daily dates (any day of the month){p_end}
+{p 8 12 2}{cmd:tcode(dquarter)} quarterly data stored as Stata daily dates{p_end}
+{p 8 12 2}{cmd:tcode(dyear)}    annual data stored as Stata daily dates{p_end}
+
+{pmore}
+Without {opt tcode()}, the command stops with an explanation if {opt time()} looks like
+{cmd:yyyymm} or {cmd:yyyyq}, and shows a note if some values between the first and the
+last date are missing in the data. Dates held as text (such as "2018m7") must first be
+turned into numbers, for example with {cmd:monthly()}, {cmd:quarterly()} or {cmd:date()}.
+
+{phang}
 {opth spans(numlist)} gives pairs of numbers, the first and last period of each span, for
 example {cmd:spans(-12 -1 0 2 3 11 12 23)}. A span after treatment is compared with the
 same seasons of the reference cycle: with {cmd:season(12)}, months 3 to 11 are compared
@@ -238,6 +263,21 @@ indicator variables, so many strata need a large {cmd:matsize} in Stata 15, and 
 could not be estimated.
 
 {phang}
+{opth by(varname)} gives state dependence: the effect is estimated for every value of
+{it:varname} (the state) in the same regressions. The state must be constant within
+{opt group()} and should be fixed before treatment, for example a characteristic of the
+product or of the firm measured before the policy; a state that the treatment can change
+would bias the comparison. Treated and control groups must both be found in every state.
+All fixed effects are interacted with the state, so the estimates for a state are those of
+the command run on the groups of that state alone, while the covariances between states
+are kept. Below the tables, a test that the effect is the same in all states is reported
+for every period and span; with two states the difference and its standard error are
+shown too. The estimates are named with the number of the state at the end, for example
+{cmd:p12_1} and {cmd:p12_2}, so that {cmd:test p12_1 = p12_2} can be typed afterwards.
+A continuous variable can be used after it is cut into groups (for example terciles).
+Not with {opt aggregate(cohort)} or {opt aggregate(equal)}. At most 20 states.
+
+{phang}
 {opt nocov} skips the covariances between the estimates of different periods and spans.
 {cmd:e(V)} is then diagonal, the joint test is not reported, and the command runs about
 twice as fast.
@@ -248,6 +288,33 @@ twice as fast.
 {opt graph} draws the period-by-period estimates.
 {opt saving(filename[, replace])} saves the results (variables type, from, to, b, se, t,
 p, ll, ul, N, ref).
+
+
+{marker frequency}{...}
+{title:Monthly, quarterly and annual data}
+
+{pstd}
+The command works with data of any frequency. What changes is {opt season()} and the unit
+in which {opt pre()}, {opt post()} and {opt spans()} are counted.
+
+{p 8 12 2}Monthly data: {opt time()} is a monthly date, {cmd:season(12)}; periods are months.{p_end}
+{p 8 12 2}Quarterly data: {opt time()} is a quarterly date, {cmd:season(4)}; periods are quarters.{p_end}
+{p 8 12 2}Annual data: {opt time()} is the year, no {opt season()}; periods are years.{p_end}
+{p 8 12 2}Weekly or daily data: {cmd:season(52)} or {cmd:season(7)}, if {opt time()} counts weeks or days without gaps.{p_end}
+
+{pstd}
+With {opt season()}, a period after treatment is compared with the same season of the last
+cycle before treatment (the same calendar month of the last year, or the same quarter), so
+the periods -{it:s} to -1 are zero by construction and the placebo estimates start at
+period -{it:s}-1. Without {opt season()}, as with annual data, every period is compared
+with period -1, the usual base of an event study. A span after treatment is compared with
+the same seasons of the last cycle (with annual data, with year -1); a span before
+treatment is compared with the same periods one or more full cycles earlier (with annual
+data, with the same number of years just before the span).
+
+{pstd}
+{opt cohort()} is the first treated period in the units of {opt time()}: a month, a
+quarter or a year. If the dates are not consecutive integers, see {opt tcode()}.
 
 
 {marker method}{...}
@@ -288,6 +355,59 @@ estimates is the one a single regression on both periods, with every term intera
 the period, would give.
 
 
+{marker checks}{...}
+{title:Checking and strengthening the design}
+
+{pstd}
+{ul:Parallel trends.} The estimates for the periods before treatment ({opt pre()}) and the
+joint test under the table check that treated and control groups moved alike before
+treatment; a span before treatment in {opt spans()} gives one pooled estimate. A test that
+does not reject is not proof, because it can have little power. A sensitivity analysis
+asks instead how large a departure from parallel trends the results can bear (Rambachan
+and Roth 2023). The command {cmd:honestdid} (Caceres Bravo; {cmd:ssc install honestdid})
+does this from the estimates and their covariance matrix, which {cmd:lpddd} stores. Copy
+them into matrices and give the positions of the estimates before and after treatment in
+{cmd:e(b)}:
+
+{phang2}{cmd:. lpddd y, unit(u) time(t) group(g) cohort(c) eligible(q) log pre(6) post(8)}{p_end}
+{phang2}{cmd:. matrix b = e(b)}{p_end}
+{phang2}{cmd:. matrix V = e(V)}{p_end}
+{phang2}{cmd:. honestdid, pre(1/5) post(6/14) mvec(0.5(0.5)2) b(b) vcov(V)}{p_end}
+
+{pstd}
+Here {cmd:e(b)} holds five estimates before treatment (periods -6 to -2; period -1 is the
+reference and is not stored) and nine after (periods 0 to 8). {cmd:matrix list e(b)} shows
+the order. By default {cmd:honestdid} reports the first period after treatment; see its
+help file for other periods or averages, and for the restrictions it offers. This use
+was tested without {opt season()}. Do not use {opt nocov} here.
+
+{pstd}
+{ul:Balancing treated and control groups.} If treated and control groups differ in
+characteristics measured before treatment, the control groups can be reweighted to
+resemble the treated ones, and the weights passed to {cmd:lpddd}. Compute one weight per
+group, from data with one observation per group, and merge it to the panel. Entropy
+balancing (Hainmueller 2012; {cmd:ebalance} by Hainmueller and Xu 2013,
+{cmd:ssc install ebalance}):
+
+{phang2}{cmd:. ebalance treated x1 x2, targets(1) generate(w)}{p_end}
+{phang2}{cmd:. lpddd y [pweight = w], unit(u) time(t) group(g) cohort(c) eligible(q) log season(12) post(24)}{p_end}
+
+{pstd}
+Inverse probability weights, with weight 1 for treated groups and p/(1-p) for control
+groups:
+
+{phang2}{cmd:. logit treated x1 x2}{p_end}
+{phang2}{cmd:. predict double p, pr}{p_end}
+{phang2}{cmd:. generate double w = cond(treated == 1, 1, p / (1 - p))}{p_end}
+{phang2}{cmd:. lpddd y [pweight = w], unit(u) time(t) group(g) cohort(c) eligible(q) log season(12) post(24)}{p_end}
+
+{pstd}
+Two limits. {cmd:lpddd} takes one weight per unit, the same in every stack, so the weights
+balance all treated groups together against the control groups, not each cohort
+separately. And the standard errors take the weights as given: they do not account for the
+weights having been estimated.
+
+
 {marker examples}{...}
 {title:Examples}
 
@@ -299,6 +419,19 @@ the period, would give.
 
 {pstd}Other suppliers alone: did they gain in the taxed products?{p_end}
 {phang2}{cmd:. lpddd imports if china == 0, unit(prod_supp) time(month) group(product) cohort(first_tariff) dd log season(12) noevent spans(12 23 24 35) strata(chapter)}{p_end}
+
+{pstd}Quarterly data: eight quarters before and twelve after, compared with the same quarter of the last year before treatment{p_end}
+{phang2}{cmd:. lpddd sales, unit(firm_market) time(quarter) group(firm) cohort(first_quarter) eligible(exposed) log season(4) pre(8) post(12) graph}{p_end}
+
+{pstd}Annual data: no season, every year compared with the year before treatment{p_end}
+{phang2}{cmd:. lpddd exports, unit(prod_dest) time(year) group(product) cohort(first_year) eligible(taxed_dest) log pre(4) post(6) graph}{p_end}
+
+{pstd}Months coded as 201501, 201502, ...{p_end}
+{phang2}{cmd:. lpddd imports, unit(prod_supp) time(yyyymm) group(product) cohort(first_yyyymm) eligible(china) log season(12) pre(24) post(24) tcode(yyyymm)}{p_end}
+
+{pstd}State dependence: products with a high and a low share of China before the tariff{p_end}
+{phang2}{cmd:. lpddd imports, unit(prod_supp) time(month) group(product) cohort(first_tariff) eligible(china) log season(12) noevent spans(12 23 24 35) gfe strata(chapter) by(highshare)}{p_end}
+{phang2}{cmd:. test span1_1 = span1_2}{p_end}
 
 {pstd}Every tariff list with the same weight{p_end}
 {phang2}{cmd:. lpddd imports, unit(prod_supp) time(month) group(product) cohort(first_tariff) eligible(china) log season(12) post(35) aggregate(equal)}{p_end}
@@ -325,6 +458,7 @@ the period, would give.
 {synopt:{cmd:e(F_pre)}}F statistic of the joint test that the estimates before treatment are zero{p_end}
 {synopt:{cmd:e(df_pre)}}number of estimates tested{p_end}
 {synopt:{cmd:e(p_pre)}}p-value of this test{p_end}
+{synopt:{cmd:e(n_by)}}number of states with {opt by()}{p_end}
 
 {p2col 5 20 24 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:lpddd}{p_end}
@@ -341,6 +475,9 @@ the period, would give.
 {synopt:{cmd:e(vcetype)}}{cmd:Robust}{p_end}
 {synopt:{cmd:e(engine)}}{cmd:reghdfe} or {cmd:builtin}{p_end}
 {synopt:{cmd:e(vfull)}}{cmd:full} if {cmd:e(V)} holds the covariances, {cmd:diagonal} otherwise{p_end}
+{synopt:{cmd:e(tcode)}}coding of the dates given in {opt tcode()}{p_end}
+{synopt:{cmd:e(by)}}state variable{p_end}
+{synopt:{cmd:e(by_levels)}}number and value of every state{p_end}
 {synopt:{cmd:e(wtype)}}weight type{p_end}
 {synopt:{cmd:e(wexp)}}weight expression{p_end}
 {synopt:{cmd:e(title)}}title of the estimation{p_end}
@@ -349,7 +486,8 @@ the period, would give.
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}estimates; names m{it:#} (period -#), p{it:#} (period +#), span{it:#}{p_end}
 {synopt:{cmd:e(V)}}variances and covariances of the estimates (diagonal with {opt nocov}){p_end}
-{synopt:{cmd:e(results)}}one row per period or span: type, from, to, b, se, t, p, ll, ul, N, ref{p_end}
+{synopt:{cmd:e(results)}}one row per period or span (and state): type, from, to, b, se, t, p, ll, ul, N, ref, state{p_end}
+{synopt:{cmd:e(het)}}with {opt by()}: test of equal effects across states, one row per period or span: type, from, to, F, df, p, diff, se{p_end}
 {synopt:{cmd:e(stack_b)}}with {opt aggregate(cohort)} or {opt aggregate(equal)}: estimate of each stack, one row per row of {cmd:e(results)}{p_end}
 {synopt:{cmd:e(stack_w)}}the weights given to the stacks{p_end}
 
@@ -377,11 +515,24 @@ Dube, A., D. Girardi, {c O'}. Jord{c a'}, and A. M. Taylor. 2025. A local projec
 approach to difference-in-differences. {it:Journal of Applied Econometrics} 40(7).
 
 {phang}
+Hainmueller, J. 2012. Entropy balancing for causal effects: A multivariate reweighting
+method to produce balanced samples in observational studies. {it:Political Analysis} 20:
+25-46.
+
+{phang}
+Hainmueller, J., and Y. Xu. 2013. ebalance: A Stata package for entropy balancing.
+{it:Journal of Statistical Software} 54(7).
+
+{phang}
 Hsieh, M. H. 2026. Stacked triple differences. arXiv:2604.22982.
 
 {phang}
 Jord{c a'}, {c O'}. 2005. Estimation and inference of impulse responses by local
 projections. {it:American Economic Review} 95: 161-182.
+
+{phang}
+Rambachan, A., and J. Roth. 2023. A more credible approach to parallel trends.
+{it:Review of Economic Studies} 90: 2555-2591.
 
 {phang}
 Wing, C., S. M. Freedman, and A. Hollingsworth. 2024. Stacked difference-in-differences.
@@ -400,5 +551,5 @@ NBER Working Paper 32054.
 {title:Also see}
 
 {psee}
-{helpb reghdfe}, {helpb lpdid}, {helpb stackdid} (if installed)
+{helpb reghdfe}, {helpb lpdid}, {helpb stackdid}, {helpb honestdid}, {helpb ebalance} (if installed)
 {p_end}
