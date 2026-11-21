@@ -2,7 +2,7 @@
 
 Stacked local-projection triple differences for Stata, with a seasonal base period and estimates for spans of periods.
 
-Version 0.4.0 (22 November 2026). This is a version for testing.
+Version 0.4.0 (22 November 2026).
 
 ## What it does
 
