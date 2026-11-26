@@ -1,5 +1,6 @@
 {smcl}
 {* *! version 0.4.0  22nov2026}{...}
+{viewerjumpto "Links" "lpddd##links"}{...}
 {viewerjumpto "Syntax" "lpddd##syntax"}{...}
 {viewerjumpto "Description" "lpddd##description"}{...}
 {viewerjumpto "Options" "lpddd##options"}{...}
@@ -14,6 +15,15 @@
 
 {phang}
 {bf:lpddd} {hline 2} Stacked local-projection triple differences with a seasonal base period
+
+
+{marker links}{...}
+{title:Links to online documentation}
+
+{p2colset 8 10 10 2}{...}
+{p2col: -}{browse "https://ahmadnju.github.io/myweb/":Website}: author's webpage, for news of future releases and documentation.{p_end}
+{p2col: -}{browse "https://github.com/ahmadNJU/stata-lpddd":Github page}: code repository, suggestions and latest news.{p_end}
+{p2colreset}{...}
 
 
 {marker syntax}{...}
@@ -47,7 +57,7 @@
 {synopt:{opt noev:ent}}do not estimate period by period (only {opt spans()}){p_end}
 
 {syntab:Outcome}
-{synopt:{opt log}}use the natural log of {depvar}; for spans, the log of the total over the span{p_end}
+{synopt:{opt log}}use the natural log of {depvar}; for spans, the log of the average over the span{p_end}
 {synopt:{opt ihs}}use the inverse hyperbolic sine instead, which keeps zeros{p_end}
 {synopt:{opt fill:zero}}in spans, count periods without an observation as zero{p_end}
 
@@ -71,6 +81,8 @@
 {cmd:aweight}s, {cmd:pweight}s and {cmd:fweight}s are allowed and must be constant within a unit.{p_end}
 {p 4 6 2}
 {cmd:lpddd} runs without other packages. If {cmd:reghdfe} (Correia) is installed it is used, which is faster with many fixed effects; {opt absorb()} requires it.{p_end}
+{p 4 6 2}
+{cmd:lpddd} requires Stata 15.1 or later.{p_end}
 
 
 {marker description}{...}
@@ -106,9 +118,10 @@ as in the usual event study.
 
 {pstd}
 With {opt spans()} the command also estimates effects for spans of periods (for example
-months 12 to 23). The outcome is first added up over the span and then compared with the
-same seasons before treatment. Spans are less noisy than single periods, and with
-{opt log} a unit stays in the sample as long as its total over the span is positive.
+months 12 to 23). The outcome is first averaged over the span and then compared with its
+average over the same seasons before treatment. Spans are less noisy than single periods,
+and with {opt log} a unit stays in the sample as long as its average over the span is
+positive.
 
 {pstd}
 With {opt dd} the third difference is dropped and the command estimates a stacked
@@ -285,9 +298,21 @@ twice as fast.
 {dlgtab:Reporting}
 
 {phang}
-{opt graph} draws the period-by-period estimates.
-{opt saving(filename[, replace])} saves the results (variables type, from, to, b, se, t,
-p, ll, ul, N, ref).
+{opt level(#)} sets the confidence level of the intervals in the table, in the graph and in
+the saved results. The default is {cmd:level(95)} or the level set by {helpb set level}.
+
+{phang}
+{opt graph} draws the period-by-period estimates with their confidence interval, with one
+panel per state if {opt by()} is used.
+
+{phang}
+{opt saving(filename[, replace])} saves the results as a Stata dataset with one row per
+period or span (variables type, from, to, b, se, t, p, ll, ul, N, ref, state). The variable
+state is 0 without {opt by()}.
+
+{phang}
+{opt notable} suppresses the tables of estimates. The description of the design is still
+shown and the stored results are the same.
 
 
 {marker frequency}{...}
@@ -330,7 +355,8 @@ f(y[i,e]) - f(y[i,base(e)]) = tau[e] x T[i] x Q[i] + fixed effects + error
 where T marks the treated groups of the stack and Q the eligible units. One regression is
 run for each {it:e}, on all stacks together. Period by period this is the local-projection
 form of the event study (Jord{c a'} 2005; Dube, Girardi, Jord{c a'} and Taylor 2025) applied
-to stacked data (Cengiz, Dube, Lindner and Zipperer 2019). With the default fixed effects
+to stacked data (Cengiz, Dube, Lindner and Zipperer 2019; Wing, Freedman and Hollingsworth
+2024). With the default fixed effects
 it is the saturated stacked triple-difference regression of Hsieh (2026), whose pooled
 coefficient is a positively weighted average of the stack-specific triple differences;
 {opt aggregate(cohort)} and {opt aggregate(equal)} are the explicit weights discussed
@@ -402,7 +428,7 @@ groups:
 {phang2}{cmd:. lpddd y [pweight = w], unit(u) time(t) group(g) cohort(c) eligible(q) log season(12) post(24)}{p_end}
 
 {pstd}
-Two limits. {cmd:lpddd} takes one weight per unit, the same in every stack, so the weights
+Limitations. {cmd:lpddd} takes one weight per unit, the same in every stack, so the weights
 balance all treated groups together against the control groups, not each cohort
 separately. And the standard errors take the weights as given: they do not account for the
 weights having been estimated.
@@ -410,6 +436,11 @@ weights having been estimated.
 
 {marker examples}{...}
 {title:Examples}
+
+{pstd}
+The variable names in these examples are illustrative: the commands show the syntax and do
+not run on a dataset that comes with Stata. A complete example that simulates its own data
+is described at the end of this section.
 
 {pstd}Monthly imports by product and supplier; the tariff applies to supplier China{p_end}
 {phang2}{cmd:. lpddd imports, unit(prod_supp) time(month) group(product) cohort(first_tariff) eligible(china) log season(12) pre(36) post(35) graph}{p_end}
@@ -436,7 +467,20 @@ weights having been estimated.
 {pstd}Every tariff list with the same weight{p_end}
 {phang2}{cmd:. lpddd imports, unit(prod_supp) time(month) group(product) cohort(first_tariff) eligible(china) log season(12) post(35) aggregate(equal)}{p_end}
 
-{pstd}A simulated example is in {cmd:lpddd_example.do} (type {cmd:net get lpddd}).{p_end}
+{pstd}
+A complete example is in {cmd:lpddd_example.do}. It simulates its own data, so it needs no
+data file, and it compares the estimates of {cmd:lpddd} with regressions built by hand. The
+file is not installed with the command. To download it to the current directory, type{p_end}
+
+{phang2}{stata "ssc install lpddd, all replace"}{p_end}
+
+{pstd}
+or, from the development repository,{p_end}
+
+{phang2}{stata "net get lpddd, from(https://raw.githubusercontent.com/ahmadNJU/stata-lpddd/main) replace"}{p_end}
+
+{pstd}
+and then type {cmd:do lpddd_example.do}.{p_end}
 
 
 {marker results}{...}
@@ -512,7 +556,7 @@ feasible estimator. Working paper.
 
 {phang}
 Dube, A., D. Girardi, {c O'}. Jord{c a'}, and A. M. Taylor. 2025. A local projections
-approach to difference-in-differences. {it:Journal of Applied Econometrics} 40(7).
+approach to difference-in-differences. {it:Journal of Applied Econometrics} 40: 741-758.
 
 {phang}
 Hainmueller, J. 2012. Entropy balancing for causal effects: A multivariate reweighting
@@ -546,6 +590,10 @@ NBER Working Paper 32054.
 {pstd} Business School, Nanjing University, China{p_end}
 {pstd} Department of Economics, University of Sahiwal, Pakistan {p_end}
 {pstd} ahmadnawaz@uosahiwal.edu.pk {p_end}
+
+{pstd}
+Questions and reports of problems are welcome by e-mail or at
+{browse "https://github.com/ahmadNJU/stata-lpddd"}.{p_end}
 
 
 {title:Also see}
